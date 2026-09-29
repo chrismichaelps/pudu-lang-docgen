@@ -1,0 +1,64 @@
+/** @Docgen.Configuration.Tests — project configuration reads typed options and refuses mistakes */
+module PuduLangDocgen.ConfigurationTest
+
+import Std.Io as Io
+import Std.Test as Test
+import PuduLangDocgen.Configuration as Configuration
+import PuduLangDocgen as Docgen
+
+/// A configuration read from JSON, or the defaults when it is refused.
+fn read(text: Str) -> Configuration.Config {
+  match Configuration.parse("docgen.json", text) {
+    case Ok(found) => found
+    case Err(_) => Configuration.defaults()
+  }
+}
+
+/// The message of a refused configuration.
+fn refused(file: Str, text: Str) -> Str {
+  match Configuration.parse(file, text) {
+    case Ok(_) => "accepted"
+    case Err(problems) => problems[0].message
+  }
+}
+
+/// Runs every option, default, and refusal contract.
+fn main() -> Int {
+  let full = read("\{\"metadata\": \{\"src\": \"src/**/*.pudu\", \"dest\": \"reference\", \"includePrivateMembers\": true, \"filter\": \{\"exclude\": [\"*.Internal.*\"]\}, \"outputFormat\": \"markdown\", \"namespaceLayout\": \"nested\", \"memberLayout\": \"separatePages\"\}, \"build\": \{\"content\": [\{\"files\": [\"**/*.md\"], \"exclude\": \"drafts/**\", \"src\": \"./docs/\", \"dest\": \"guide\"\}], \"resource\": \"images/**\", \"output\": \"public\", \"globalMetadata\": \{\"_appTitle\": \"Site\"\}, \"fileMetadata\": \{\"_layout\": \{\"index.md\": \"landing\"\}\}, \"template\": [\"default\", \"brand\"], \"xref\": \"https://example.org/xrefmap.yml\", \"sitemap\": \{\"baseUrl\": \"https://example.org\", \"priority\": \"0.8\", \"changefreq\": \"daily\"\}, \"disableGitFeatures\": true, \"gitContribute\": \{\"repo\": \"https://github.com/o/r\", \"branch\": \"dev\"\}, \"warningsAsErrors\": true, \"rules\": \{\"DG123\": \"off\"\}, \"markdownEngineProperties\": \{\"alerts\": \{\"todo\": \"alert alert-todo\"\}, \"plantUml\": \{\"remoteUrl\": \"https://plant.example/\", \"outputFormat\": \"png\"\}\}, \"dryRun\": true, \"exportRawModel\": true\}, \"pdf\": \{\"content\": \"toc.yml\", \"name\": \"manual\"\}\}")
+  let checks = Test.suite("Configuration", &[
+      Test.equals("defaults", &(Configuration.defaults().output, Configuration.defaults().templates, Configuration.defaults().gitFeatures), &("_site", ["default"], true)),
+      Test.equals("content mapping", &full.content, &[Configuration.Mapping{files: ["**/*.md"], exclude: ["drafts/**"], src: "docs", dest: "guide"}]),
+      Test.equals("plain glob mapping", &full.resource, &[Configuration.Mapping{files: ["images/**"], exclude: [], src: "", dest: ""}]),
+      Test.equals("metadata source", &(full.metadata[0].options.dest, full.metadata[0].options.includePrivate, full.metadata[0].options.exclude, full.metadata[0].format, full.metadata[0].options.nested, full.metadata[0].options.separate), &("reference", true, ["*.Internal.*"], "markdown", true, true)),
+      Test.equals("output and templates", &(full.output, full.templates, full.xref), &("public", ["default", "brand"], ["https://example.org/xrefmap.yml"])),
+      Test.equals("global and file metadata", &(full.globalMetadata, full.fileMetadata.length()), &([("_appTitle", Docgen.Text("Site"))], 1)),
+      Test.equals("switches", &(full.gitFeatures, full.warningsAsErrors, full.dryRun, full.exportRawModel), &(false, true, true, "public")),
+      Test.equals("contribution", &full.contribution, &Configuration.Contribution{repo: "https://github.com/o/r", branch: "dev", path: ""}),
+      Test.equals("rules and alerts", &(full.rules, full.alerts), &([("DG123", "off")], [("TODO", "alert alert-todo")])),
+      Test.equals("diagrams", &(full.diagrams.remote, full.diagrams.format, full.diagrams.local), &("https://plant.example", "png", false)),
+      Test.that("sitemap", match full.sitemap { case Some(found) => found.baseUrl == "https://example.org" && found.priority == "0.8" case None => false }),
+      Test.that("pdf", match full.pdf { case Some(found) => found.name == "manual" && found.tocs == ["toc.yml"] && found.output == "_pdf" case None => false }),
+      Test.equals("yaml configuration", &read("build:\n  output: out").output, &"_site"),
+      Test.equals("yaml read by name", &match Configuration.parse("docgen.yml", "build:\n  output: out\n") { case Ok(found) => found.output case Err(_) => "" }, &"out"),
+      Test.equals("not json", &refused("docgen.json", "\{"), &"configuration is not valid JSON: unterminated object"),
+      Test.equals("not an object", &refused("docgen.json", "[]"), &"configuration must be an object"),
+      Test.equals("unknown top option", &refused("docgen.json", "\{\"site\": 1\}"), &"site: unknown option"),
+      Test.equals("unknown build option", &refused("docgen.json", "\{\"build\": \{\"colour\": 1\}\}"), &"build.colour: unknown option"),
+      Test.equals("wrong type", &refused("docgen.json", "\{\"build\": \{\"dryRun\": \"yes\"\}\}"), &"build.dryRun: must be true or false"),
+      Test.equals("escaping folder", &refused("docgen.json", "\{\"build\": \{\"output\": \"../out\"\}\}"), &"build.output: must be a relative folder inside the project: ../out"),
+      Test.equals("project folder as output", &refused("docgen.json", "\{\"build\": \{\"output\": \".\"\}\}"), &"build.output: must name a folder other than the project folder"),
+      Test.equals("mapping needs files", &refused("docgen.json", "\{\"build\": \{\"content\": [\{\"src\": \"docs\"\}]\}\}"), &"build.content[0].files: must name at least one glob"),
+      Test.equals("rule level", &refused("docgen.json", "\{\"build\": \{\"rules\": \{\"DG1\": \"loud\"\}\}\}"), &"build.rules.DG1: must be one of error, warning, info, off"),
+      Test.equals("sitemap address", &refused("docgen.json", "\{\"build\": \{\"sitemap\": \{\"baseUrl\": \"docs.example\"\}\}\}"), &"build.sitemap.baseUrl: must be an absolute http or https address"),
+      Test.equals("sitemap priority", &refused("docgen.json", "\{\"build\": \{\"sitemap\": \{\"baseUrl\": \"https://a.b\", \"priority\": \"1.5\"\}\}\}"), &"build.sitemap.priority: must be a number from 0.0 to 1.0"),
+      Test.equals("sitemap frequency", &refused("docgen.json", "\{\"build\": \{\"sitemap\": \{\"baseUrl\": \"https://a.b\", \"changefreq\": \"often\"\}\}\}"), &"build.sitemap.changefreq: must be one of always, hourly, daily, weekly, monthly, yearly, never"),
+      Test.equals("metadata needs sources", &refused("docgen.json", "\{\"metadata\": [\{\"dest\": \"api\"\}]\}"), &"metadata[0].src: must name the Pudu sources to document"),
+      Test.equals("metadata format", &refused("docgen.json", "\{\"metadata\": [\{\"src\": \"a\", \"outputFormat\": \"xml\"\}]\}"), &"metadata[0].outputFormat: must be one of json, markdown, apiPage"),
+      Test.equals("member layout", &refused("docgen.json", "\{\"metadata\": [\{\"src\": \"a\", \"memberLayout\": \"wide\"\}]\}"), &"metadata[0].memberLayout: must be samePage or separatePages"),
+      Test.equals("diagram mode", &refused("docgen.json", "\{\"build\": \{\"markdownEngineProperties\": \{\"plantUml\": \{\"renderingMode\": \"cloud\"\}\}\}\}"), &"build.markdownEngineProperties.plantUml.renderingMode: must be remote or local"),
+      Test.equals("file metadata shape", &refused("docgen.json", "\{\"build\": \{\"fileMetadata\": \{\"k\": 1\}\}\}"), &"build.fileMetadata: file metadata k must map glob patterns to values")
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

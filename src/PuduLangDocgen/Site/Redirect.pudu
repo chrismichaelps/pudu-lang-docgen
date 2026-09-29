@@ -1,0 +1,24 @@
+/** @Docgen.Site.Redirect — pages that send readers to a moved article */
+module PuduLangDocgen.Site.Redirect
+
+import PuduLangDocgen.Paths as Paths
+
+/// A standalone page that forwards the browser to a destination at once and links to it.
+export fn page(title: Str, destination: Str) -> Str {
+  let href = Paths.escape(destination)
+  [
+    "<!doctype html>",
+    "<html lang=\"en\">",
+    "<head>",
+    "<meta charset=\"utf-8\">",
+    "<title>" + Paths.escape(title) + "</title>",
+    "<meta name=\"robots\" content=\"noindex\">",
+    "<meta http-equiv=\"refresh\" content=\"0; url=" + href + "\">",
+    "<link rel=\"canonical\" href=\"" + href + "\">",
+    "</head>",
+    "<body>",
+    "<p class=\"redirect\">This page has moved to <a href=\"" + href + "\">" + href + "</a>.</p>",
+    "</body>",
+    "</html>"
+  ].join("\n") + "\n"
+}

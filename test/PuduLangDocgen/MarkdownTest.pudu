@@ -1,0 +1,136 @@
+/** @Docgen.Markdown.Tests — article syntax renders to exact, safe HTML */
+module PuduLangDocgen.MarkdownTest
+
+import Std.Io as Io
+import Std.Test as Test
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown as Markdown
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Markdown.Render as Render
+
+/// Files available to includes and excerpts in these checks.
+const FILES: Array[(Str, Str)] = [
+  ("docs/shared/note.md", "---\ntitle: ignored\n---\nShared **text** with [a link](../guide.md)."),
+  ("docs/shared/loop.md", "[!INCLUDE[again](loop.md)]"),
+  ("src/Sample.pudu", "module Sample\n\n// <main>\nfn main() -> Int \{\n  0\n\}\n// </main>\n")
+]
+
+/// Published outputs keyed by project-relative source path.
+const OUTPUTS: Array[(Str, Str)] = [
+  ("docs/guide.md", "guide.html"), ("docs/api/index.md", "api/index.html"), ("docs/images/logo.png", "images/logo.png"),
+  ("docs/index.md", "index.html")
+]
+
+/// Rendering of an article written at `docs/index.md`.
+fn rendered(text: Str) -> Render.Rendered {
+  let article = Markdown.parse("docs/index.md", text, &mapOf(FILES), &["SECURITY"])
+  let references = mapOf([("Std.Io", Docgen.Reference{uid: "Std.Io", name: "Io", fullName: "Std.Io", href: "api/Std.Io.html", kind: "module"})])
+  let settings = Phrase.Rendering{..Phrase.rendering(), alertClasses: mapOf([("SECURITY", "alert alert-security custom")]), alertTitles: mapOf([("security", "Security notice")])}
+  let context = Phrase.Scope{page: "index.html", source: "docs/index.md", outputs: mapOf(OUTPUTS), references: references, settings: settings}
+  let result = Render.render(&article.blocks, &context)
+  Render.Rendered{..result, diagnostics: article.diagnostics.concat(result.diagnostics)}
+}
+
+/// HTML of an article with trailing newlines removed.
+fn html(text: Str) -> Str { rendered(text).html.trim() }
+
+/// Diagnostic codes an article produces.
+fn codes(text: Str) -> Array[Str] { rendered(text).diagnostics.map(|found: Docgen.Diagnostic| found.code) }
+
+/// Runs every block, inline, extension, and safety contract.
+fn main() -> Int {
+  let checks = Test.suite("Markdown", &[
+      Test.equals("paragraph", &html("Hello world"), &"<p>Hello world</p>"),
+      Test.equals("atx heading with permalink", &html("## Get started"), &"<h2 id=\"get-started\">Get started<a class=\"anchor\" href=\"#get-started\" aria-label=\"Link to this section\"></a></h2>"),
+      Test.equals("explicit heading id", &html("# Title \{#custom\}"), &"<h1 id=\"custom\">Title</h1>"),
+      Test.equals("closing hashes removed", &html("# Title ##"), &"<h1 id=\"title\">Title</h1>"),
+      Test.equals("setext heading", &html("Title\n====="), &"<h1 id=\"title\">Title</h1>"),
+      Test.equals("duplicate ids numbered", &rendered("## A\n## A").headings.map(|found: Docgen.Heading| found.id), &["a", "a-2"]),
+      Test.equals("title from first h1", &rendered("## x\n# Main").title, &"Main"),
+      Test.equals("emphasis kinds", &html("*a* **b** ***c*** ~~d~~ _e_"), &"<p><em>a</em> <strong>b</strong> <em><strong>c</strong></em> <del>d</del> <em>e</em></p>"),
+      Test.equals("nested emphasis", &html("**bold *em* bold**"), &"<p><strong>bold <em>em</em> bold</strong></p>"),
+      Test.equals("intraword underscore", &html("snake_case_name"), &"<p>snake_case_name</p>"),
+      Test.equals("unmatched delimiter literal", &html("a * b"), &"<p>a * b</p>"),
+      Test.equals("code span escapes", &html("`<b>` and `` a`b ``"), &"<p><code>&lt;b&gt;</code> and <code>a`b</code></p>"),
+      Test.equals("backslash escape", &html("\\*not\\*"), &"<p>*not*</p>"),
+      Test.equals("hard break", &html("a  \nb"), &"<p>a<br>\nb</p>"),
+      Test.equals("soft break", &html("a\nb"), &"<p>a\nb</p>"),
+      Test.equals("local link mapped", &html("[Guide](guide.md#setup)"), &"<p><a href=\"guide.html#setup\">Guide</a></p>"),
+      Test.equals("link title", &html("[G](guide.md \"The guide\")"), &"<p><a href=\"guide.html\" title=\"The guide\">G</a></p>"),
+      Test.equals("external link", &html("[x](https://example.org)"), &"<p><a href=\"https://example.org\" class=\"external\">x</a></p>"),
+      Test.equals("reference link", &html("[Guide][g]\n\n[g]: guide.md"), &"<p><a href=\"guide.html\">Guide</a></p>"),
+      Test.equals("shortcut reference", &html("[Guide]\n\n[guide]: guide.md"), &"<p><a href=\"guide.html\">Guide</a></p>"),
+      Test.equals("unsafe link unlinked", &html("[x](javascript:alert(1))"), &"<p>x</p>"),
+      Test.equals("unsafe link warns", &codes("[x](javascript:alert(1))"), &[Codes.UNSAFE_DESTINATION]),
+      Test.equals("broken link warns", &codes("[x](missing.md)"), &[Codes.LINK_BROKEN]),
+      Test.equals("escaping root warns", &codes("[x](../../x.md)"), &[Codes.DESTINATION_ESCAPES]),
+      Test.equals("image resolved", &html("![Logo](images/logo.png)"), &"<p><img src=\"images/logo.png\" alt=\"Logo\" loading=\"lazy\"></p>"),
+      Test.equals("missing image warns", &codes("![x](images/none.png)"), &[Codes.IMAGE_MISSING]),
+      Test.equals("autolink", &html("<https://a.org/x>"), &"<p><a href=\"https://a.org/x\" class=\"external\">https://a.org/x</a></p>"),
+      Test.equals("email autolink", &html("<me@a.org>"), &"<p><a href=\"mailto:me@a.org\">me@a.org</a></p>"),
+      Test.equals("bare address trims punctuation", &html("See https://a.org/x."), &"<p>See <a href=\"https://a.org/x\" class=\"external\">https://a.org/x</a>.</p>"),
+      Test.equals("www address", &html("www.a.org"), &"<p><a href=\"https://www.a.org\" class=\"external\">www.a.org</a></p>"),
+      Test.equals("xref forms", &html("<xref:Std.Io> @Std.Io [io](xref:Std.Io) <xref:Std.Io?displayProperty=fullName>"), &"<p><a class=\"xref\" href=\"api/Std.Io.html\">Io</a> <a class=\"xref\" href=\"api/Std.Io.html\">Io</a> <a class=\"xref\" href=\"api/Std.Io.html\">io</a> <a class=\"xref\" href=\"api/Std.Io.html\">Std.Io</a></p>"),
+      Test.equals("unresolved xref", &html("@Missing.Thing"), &"<p><span class=\"xref unresolved\">@Missing.Thing</span></p>"),
+      Test.equals("unresolved xref warns", &codes("<xref:Nope>"), &[Codes.XREF_UNRESOLVED]),
+      Test.equals("mention needs boundary", &html("a@b.c"), &"<p>a@b.c</p>"),
+      Test.equals("entities decoded then escaped", &html("&copy; &#65; &#x42; &lt;x&gt; &bogus;"), &"<p>© A B &lt;x&gt; &amp;bogus;</p>"),
+      Test.equals("emoji codes", &html(":tada: :thumbs_up_medium_skin_tone: :flag_japan: :nope:"), &"<p>🎉 👍🏽 🇯🇵 :nope:</p>"),
+      Test.equals("inline math", &html("$x^2$ costs $5 and $10"), &"<p><span class=\"math\">\\(x^2\\)</span> costs $5 and $10</p>"),
+      Test.equals("math feature", &rendered("$$\na+b\n$$").features, &["math"]),
+      Test.equals("allowed inline html", &html("<kbd>Ctrl</kbd> <script>x</script>"), &"<p><kbd>Ctrl</kbd> &lt;script&gt;x&lt;/script&gt;</p>"),
+      Test.equals("html comment dropped", &html("a <!-- hidden --> b"), &"<p>a  b</p>"),
+      Test.equals("bullet list tight", &html("- a\n- b"), &"<ul>\n<li>a</li>\n<li>b</li>\n</ul>"),
+      Test.equals("ordered list start", &html("3. a\n4. b"), &"<ol start=\"3\">\n<li>a</li>\n<li>b</li>\n</ol>"),
+      Test.equals("loose list", &html("- a\n\n- b"), &"<ul>\n<li><p>a</p>\n</li>\n<li><p>b</p>\n</li>\n</ul>"),
+      Test.equals("nested list", &html("- a\n  - b\n- c"), &"<ul>\n<li>a<ul>\n<li>b</li>\n</ul>\n</li>\n<li>c</li>\n</ul>"),
+      Test.equals("task list", &html("- [x] done\n- [ ] open"), &"<ul class=\"tasks\">\n<li><input type=\"checkbox\" disabled checked> done</li>\n<li><input type=\"checkbox\" disabled> open</li>\n</ul>"),
+      Test.equals("lazy list continuation", &html("- a\nb"), &"<ul>\n<li>a\nb</li>\n</ul>"),
+      Test.equals("quote", &html("> a\n> b"), &"<blockquote>\n<p>a\nb</p>\n</blockquote>"),
+      Test.equals("alert", &html("> [!WARNING]\n> Careful"), &"<div class=\"alert alert-warning\" role=\"note\"><p class=\"alert-title\">Warning</p>\n<p>Careful</p>\n</div>"),
+      Test.equals("custom alert", &html("> [!SECURITY]\n> Keys"), &"<div class=\"alert alert-security custom\" role=\"note\"><p class=\"alert-title\">Security notice</p>\n<p>Keys</p>\n</div>"),
+      Test.equals("unknown alert warns", &codes("> [!BOGUS]\n> x"), &[Codes.UNKNOWN_ALERT]),
+      Test.equals("video", &html("> [!Video https://v.example/embed/1]"), &"<div class=\"video\"><iframe src=\"https://v.example/embed/1\" title=\"Video\" loading=\"lazy\" allowfullscreen></iframe></div>"),
+      Test.equals("insecure video warns", &codes(":::video source=\"http://v.example/1\":::"), &[Codes.VIDEO_INSECURE]),
+      Test.equals("fenced code highlighted", &html("```pudu\nlet x = 1\n```"), &"<div class=\"code-block\"><div class=\"code-header\"><span class=\"code-label\">Pudu</span><button type=\"button\" class=\"copy\" aria-label=\"Copy code\">Copy</button></div><pre tabindex=\"0\"><code class=\"lang-pudu\"><span class=\"hl-k\">let</span> x = <span class=\"hl-n\">1</span></code></pre></div>"),
+      Test.equals("fence title and highlight", &html("```text title=\"Out\" highlight=\"2\"\na\nb\n```"), &"<div class=\"code-block\"><div class=\"code-header\"><span class=\"code-label\">Out</span><button type=\"button\" class=\"copy\" aria-label=\"Copy code\">Copy</button></div><pre tabindex=\"0\"><code class=\"lang-text\">a\n<span class=\"line highlight\">b</span></code></pre></div>"),
+      Test.equals("unclosed fence warns", &codes("```\ncode"), &[Codes.UNCLOSED_BLOCK]),
+      Test.equals("indented code", &html("    <x>"), &"<div class=\"code-block\"><div class=\"code-header\"><span class=\"code-label\">Code</span><button type=\"button\" class=\"copy\" aria-label=\"Copy code\">Copy</button></div><pre tabindex=\"0\"><code>&lt;x&gt;</code></pre></div>"),
+      Test.equals("mermaid", &html("```mermaid\ngraph TD\n```"), &"<pre class=\"mermaid\">graph TD</pre>"),
+      Test.equals("table alignment", &html("| a | b |\n|:-|-:|\n| 1 | 2 |"), &"<div class=\"table-wrapper\"><table>\n<thead><tr><th class=\"align-left\">a</th><th class=\"align-right\">b</th></tr></thead>\n<tbody>\n<tr><td class=\"align-left\">1</td><td class=\"align-right\">2</td></tr>\n</tbody></table></div>"),
+      Test.equals("table pads rows and keeps escaped pipes", &html("| a | b |\n|---|---|\n| x\\|y |"), &"<div class=\"table-wrapper\"><table>\n<thead><tr><th>a</th><th>b</th></tr></thead>\n<tbody>\n<tr><td>x|y</td><td></td></tr>\n</tbody></table></div>"),
+      Test.equals("thematic break", &html("***"), &"<hr>"),
+      Test.equals("html block sanitized", &html("<div class=\"x\" onclick=\"y\"><a href=\"javascript:z\">k</a><script>bad()</script></div>"), &"<div class=\"x\"><a>k</a>&lt;script&gt;bad()&lt;/script&gt;</div>"),
+      Test.equals("block include", &html("[!INCLUDE[note](shared/note.md)]"), &"<p>Shared <strong>text</strong> with <a href=\"guide.html\">a link</a>.</p>"),
+      Test.equals("inline include", &html("Before [!INCLUDE[n](shared/note.md)] after"), &"<p>Before Shared <strong>text</strong> with <a href=\"guide.html\">a link</a>. after</p>"),
+      Test.equals("include cycle", &codes("[!INCLUDE[x](shared/loop.md)]"), &[Codes.INCLUDE_CYCLE]),
+      Test.equals("missing include", &codes("[!INCLUDE[x](none.md)]"), &[Codes.INCLUDE_MISSING]),
+      Test.equals("excerpt by tag region", &html("[!code-pudu[](../src/Sample.pudu#main)]"), &"<div class=\"code-block\"><div class=\"code-header\"><span class=\"code-label\">Pudu</span><button type=\"button\" class=\"copy\" aria-label=\"Copy code\">Copy</button></div><pre tabindex=\"0\"><code class=\"lang-pudu\"><span class=\"hl-k\">fn</span> main() -&gt; <span class=\"hl-t\">Int</span> \{\n  <span class=\"hl-n\">0</span>\n\}</code></pre></div>"),
+      Test.equals("excerpt directive with range", &html(":::code source=\"../src/Sample.pudu\" range=\"1\":::"), &"<div class=\"code-block\"><div class=\"code-header\"><span class=\"code-label\">Pudu</span><button type=\"button\" class=\"copy\" aria-label=\"Copy code\">Copy</button></div><pre tabindex=\"0\"><code class=\"lang-pudu\"><span class=\"hl-k\">module</span> <span class=\"hl-t\">Sample</span></code></pre></div>"),
+      Test.equals("missing region", &codes("[!code-pudu[](../src/Sample.pudu#other)]"), &[Codes.EXCERPT_INVALID]),
+      Test.equals("missing excerpt file", &codes("[!code[](../src/None.pudu)]"), &[Codes.EXCERPT_MISSING]),
+      Test.equals("tabs", &html("# [One](#tab/one)\nA\n# [Two](#tab/two)\nB\n---\nafter"), &"<div class=\"tabs\"><div class=\"tab-list\" role=\"tablist\"><button type=\"button\" role=\"tab\" id=\"tab-1-0\" aria-selected=\"true\" data-tab=\"one\">One</button><button type=\"button\" role=\"tab\" id=\"tab-1-1\" aria-selected=\"false\" data-tab=\"two\">Two</button></div>\n<section class=\"tab-panel\" role=\"tabpanel\" aria-labelledby=\"tab-1-0\" data-tab=\"one\">\n<p>A</p>\n</section>\n<section class=\"tab-panel\" role=\"tabpanel\" aria-labelledby=\"tab-1-1\" data-tab=\"two\" hidden>\n<p>B</p>\n</section>\n</div>\n<p>after</p>"),
+      Test.that("dependent tabs share one button per id", html("# [A](#tab/a/x)\n1\n# [A](#tab/a/y)\n2\n# [B](#tab/b)\n3\n***").split("role=\"tab\"").length() == 3 && html("# [A](#tab/a/x)\n1\n# [A](#tab/a/y)\n2\n***").contains("data-condition=\"y\" hidden")),
+      Test.equals("emphasis extras", &html("H~2~O x^2^ ++new++ ==hot=="), &"<p>H<sub>2</sub>O x<sup>2</sup> <ins>new</ins> <mark>hot</mark></p>"),
+      Test.equals("lonely extras stay text", &html("a ^ b + c == d ~ e"), &"<p>a ^ b + c == d ~ e</p>"),
+      Test.equals("footnotes", &html("Text[^n] again[^n].\n\n[^n]: The note\n    continues."), &"<p>Text<sup class=\"footnote-ref\"><a href=\"#fn-n\" id=\"fnref-n\">1</a></sup> again<sup class=\"footnote-ref\"><a href=\"#fn-n\">1</a></sup>.</p>\n<section class=\"footnotes\" role=\"doc-endnotes\">\n<hr>\n<ol>\n<li id=\"fn-n\">\n<p>The note\ncontinues.</p>\n<a href=\"#fnref-n\" class=\"footnote-back\" aria-label=\"Back to reference\">↩</a></li>\n</ol>\n</section>"),
+      Test.equals("video media link", &html("![Intro](https://youtu.be/abc123)"), &"<p><span class=\"video\"><iframe src=\"https://www.youtube-nocookie.com/embed/abc123\" title=\"Intro\" loading=\"lazy\" allowfullscreen></iframe></span></p>"),
+      Test.equals("video file link", &html("![](https://cdn.example/a.mp4)"), &"<p><video controls preload=\"metadata\" src=\"https://cdn.example/a.mp4\" title=\"Video\"></video></p>"),
+      Test.equals("plantuml", &html("```plantuml\nA->B\n```"), &"<p class=\"diagram\"><img class=\"plantuml\" src=\"https://www.plantuml.com/plantuml/svg/~h412d3e42\" alt=\"Diagram\" loading=\"lazy\"></p>"),
+      Test.equals("row layout", &html(":::row:::\n:::column span=\"2\":::\nA\n:::column-end:::\n:::column:::\nB\n:::column-end:::\n:::row-end:::"), &"<div class=\"row\">\n<div class=\"column\" style=\"flex-grow: 2\">\n<p>A</p>\n</div>\n<div class=\"column\" style=\"flex-grow: 1\">\n<p>B</p>\n</div>\n</div>"),
+      Test.equals("image directive", &html(":::image type=\"content\" source=\"images/logo.png\" alt-text=\"Logo\":::"), &"<figure class=\"image image-content\"><img src=\"images/logo.png\" alt=\"Logo\" loading=\"lazy\"></figure>"),
+      Test.equals("unclosed container", &codes(":::row:::\nx"), &[Codes.DIRECTIVE_UNCLOSED]),
+      Test.equals("unsupported directive keeps content", &html("::: zone pivot=\"a\"\ntext\n::: zone-end"), &"<p>text</p>"),
+      Test.equals("front matter kept apart", &Markdown.parse("docs/a.md", "---\ntitle: T\nuid: a.b\n---\nBody", &mapOf([]), &[]).meta, &[("title", Docgen.Text("T")), ("uid", Docgen.Text("a.b"))]),
+      Test.equals("front matter lines keep numbers", &codes("---\ntitle: x\n---\n[a](missing.md)").length(), &1),
+      Test.equals("unclosed front matter", &codes("---\ntitle: x"), &[Codes.FRONT_MATTER_INVALID]),
+      Test.equals("summary from first paragraph", &rendered("# T\n\nFirst *para*.\n\nSecond").summary, &"First para."),
+      Test.equals("links recorded for validation", &rendered("[a](guide.md#x) [b](#y)").links.map(|found: Docgen.Link| found.target), &["guide.html#x", "index.html#y"]),
+      Test.equals("dependencies", &Markdown.dependencies("docs/index.md", "[!INCLUDE[a](shared/note.md)]\n[!code-pudu[](../src/Sample.pudu#main)]\nx [!include[b](b.md)] y"), &["docs/shared/note.md", "src/Sample.pudu", "docs/b.md"]),
+      Test.equals("deep nesting is bounded", &codes(">>>>>>>>>>>>>>>>>>>>>>>>>>>>>> deep"), &[Codes.NESTING_TOO_DEEP])
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

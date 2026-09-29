@@ -1,0 +1,81 @@
+/** @Docgen.Markdown.Leaves — blocks read without nested content: code, math, and raw HTML */
+module PuduLangDocgen.Markdown.Leaves
+
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown.Directives as Directives
+import PuduLangDocgen.Markdown.FrontMatter as FrontMatter
+import PuduLangDocgen.Markdown.Layout as Layout
+import PuduLangDocgen.Markdown.Snippet as Snippet
+import PuduLangDocgen.Markdown.Syntax as Syntax
+
+/** @Docgen.Markdown.Step — blocks read from one position and where reading resumes */
+export type Step = { blocks: Array[Syntax.Block], next: Int, diagnostics: Array[Docgen.Diagnostic] }
+
+/// A fenced code block; an unclosed fence runs to the end of its container.
+export fn fenced(lines: &Array[FrontMatter.Line], index: Int, opened: &Layout.Fence, origin: Str) -> Step {
+  var end = index + 1
+  var code: Array[Str] = []
+  while end < lines.length() && !Layout.closes(lines[end].text, opened) {
+    code = code.push(Layout.strip(lines[end].text, opened.indent))
+    end = end + 1
+  }
+  let words = opened.info.split(" ")
+  let options = Directives.attributes(opened.info.drop(words[0].length()))
+  let found = Directives.Directive{name: "", attributes: options, closed: true}
+  let highlight = match Snippet.ranges(Directives.value(&found, "highlight")) {
+    case Ok(bounds) => Layout.expand(&bounds, code.length())
+    case Err(_) => []
+  }
+  let sample = Syntax.Sample{language: words[0], title: Directives.value(&found, "title"), text: code.join("\n"), highlight: highlight, line: lines[index].number}
+  let problems = if end >= lines.length() { [Docgen.warning(Codes.UNCLOSED_BLOCK, origin, lines[index].number, "code fence is not closed")] } else { [] }
+  Step{blocks: [Syntax.CodeBlock(sample)], next: end + 1, diagnostics: problems}
+}
+
+/// Code indented by four columns; blank lines inside are kept.
+export fn indented(lines: &Array[FrontMatter.Line], index: Int) -> Step {
+  var end = index
+  var last = index
+  while end < lines.length() && (Layout.blank(lines[end].text) || Layout.indent(lines[end].text) >= 4) {
+    if !Layout.blank(lines[end].text) { last = end }
+    end = end + 1
+  }
+  let code = lines.slice(index, last + 1).map(|line: FrontMatter.Line| Layout.strip(line.text, 4)).join("\n")
+  Step{blocks: [Syntax.CodeBlock(Syntax.Sample{language: "", title: "", text: code, highlight: [], line: lines[index].number})], next: last + 1, diagnostics: []}
+}
+
+/// A display math block between `$$` lines, or on one line.
+export fn mathBlock(lines: &Array[FrontMatter.Line], index: Int, origin: Str) -> Step {
+  let first = lines[index].text.trim().drop(2)
+  if first.endsWith("$$") && first.length() >= 2 {
+    return Step{blocks: [Syntax.MathBlock(first.take(first.length() - 2).trim())], next: index + 1, diagnostics: []}
+  }
+  var body: Array[Str] = if first.trim().isEmpty() { [] } else { [first] }
+  var end = index + 1
+  while end < lines.length() && !lines[end].text.trim().endsWith("$$") {
+    body = body.push(lines[end].text)
+    end = end + 1
+  }
+  if end >= lines.length() {
+    return Step{blocks: [Syntax.MathBlock(body.join("\n"))], next: end, diagnostics: [Docgen.warning(Codes.UNCLOSED_BLOCK, origin, lines[index].number, "math block is not closed")]}
+  }
+  let closing = lines[end].text.trim()
+  let tail = closing.take(closing.length() - 2)
+  let all = if tail.trim().isEmpty() { body } else { body.push(tail) }
+  Step{blocks: [Syntax.MathBlock(all.join("\n"))], next: end + 1, diagnostics: []}
+}
+
+/// Raw HTML running to the next blank line, or to the end of a comment.
+export fn markup(lines: &Array[FrontMatter.Line], index: Int) -> Step {
+  let comment = lines[index].text.trim().startsWith("<!--")
+  var end = index
+  var body: Array[Str] = []
+  while end < lines.length() {
+    let text = lines[end].text
+    if !comment && Layout.blank(text) { break }
+    body = body.push(text)
+    end = end + 1
+    if comment && text.contains("-->") { break }
+  }
+  Step{blocks: if comment { [] } else { [Syntax.HtmlBlock(body.join("\n"))] }, next: end, diagnostics: []}
+}

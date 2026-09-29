@@ -1,0 +1,41 @@
+/** @Docgen.Markdown.FrontMatter — YAML header split from article body lines */
+module PuduLangDocgen.Markdown.FrontMatter
+
+import Std.Text as Text
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Yaml as Yaml
+
+/** @Docgen.Markdown.Line — one body line with its one-based source number */
+export type Line = { text: Str, number: Int }
+
+/** @Docgen.Markdown.Header — metadata and the body lines after it */
+export type Header = { meta: Array[(Str, Docgen.Meta)], lines: Array[Line] }
+
+/// Metadata from a leading `---` block and the numbered lines after it.
+/// A header that is not a YAML mapping fails with its one-based line.
+export fn split(text: Str) -> Result[Header, (Int, Str)] {
+  let unmarked = if text.startsWith("\u{feff}") { text.drop(1) } else { text }
+  let all = unmarked.replace("\r\n", "\n").replace("\r", "\n").split("\n")
+  if Text.trimEnd(all[0]) != "---" { return Ok(Header{meta: [], lines: numbered(&all, 0)}) }
+  var close = 1
+  while close < all.length() && Text.trimEnd(all[close]) != "---" && Text.trimEnd(all[close]) != "..." { close = close + 1 }
+  if close >= all.length() { return Err((1, "front matter is not closed")) }
+  let header = all.slice(1, close).join("\n")
+  let body = numbered(&all, close + 1)
+  if header.trim().isEmpty() { return Ok(Header{meta: [], lines: body}) }
+  let parsed = match Yaml.decode(header) {
+    case Ok(found) => found
+    case Err(reason) => { return Err((2, "front matter: " + reason)) }
+  }
+  match parsed {
+    case Docgen.Fields(fields) => Ok(Header{meta: fields, lines: body})
+    case _ => Err((2, "front matter must be a mapping of keys to values"))
+  }
+}
+
+/// Lines from an index numbered by their position in the file.
+fn numbered(all: &Array[Str], from: Int) -> Array[Line] {
+  var result: Array[Line] = []
+  for index in from..all.length() { result = result.push(Line{text: all[index], number: index + 1}) }
+  result
+}

@@ -1,0 +1,100 @@
+/** @Docgen.Docset.Walk — confined reads of a project folder and its files */
+module PuduLangDocgen.Docset.Walk
+
+import Std.Fs as Fs
+import Std.Io as Io
+import Std.List as List
+import Std.Path as Path
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Paths as Paths
+
+/// Deepest folder nesting read.
+const MAX_DEPTH: Int = 64
+
+/// Most files a project may hold.
+const MAX_FILES: Int = 100000
+
+/// Largest file read, in bytes.
+const MAX_BYTES: Int = 33554432
+
+/// Folder names never read: tool state and dependency caches.
+const IGNORED: Array[Str] = ["node_modules", "obj", "bin", "deps", "dist-newstyle"]
+
+/// Every regular file under a folder as a portable relative path, sorted. Hidden entries,
+/// ignored folders, the `skip` folders, and symbolic links are left out.
+export fn files(base: Str, skip: &Array[Str]) -> Result[Array[Str], Array[Docgen.Diagnostic]] {
+  let found = walk(base, "", skip, 0) ?
+  Ok(List.sortBy(&found, |left: Str, right: Str| left < right))
+}
+
+/// The text of files by relative path; unreadable files are reported and left out.
+export fn texts(base: Str, paths: &Array[Str]) -> (Map[Str, Str], Array[Docgen.Diagnostic]) {
+  var found: Array[(Str, Str)] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  for path in *paths {
+    match text(base, path) {
+      case Ok(held) => { found = found.push((path, held)) }
+      case Err(problem) => { problems = problems.push(problem) }
+    }
+  }
+  (mapOf(found), problems)
+}
+
+/// The text of one file inside the folder.
+export fn text(base: Str, path: Str) -> Result[Str, Docgen.Diagnostic] {
+  let physical = inside(base, path) ?
+  match Io.read(physical) {
+    case Ok(held) => Ok(held)
+    case Err(reason) => Err(Docgen.error(Codes.FILE_UNREADABLE, path, 1, reason))
+  }
+}
+
+/// The bytes of one file inside the folder.
+export fn bytes(base: Str, path: Str) -> Result[Bytes, Docgen.Diagnostic] {
+  let physical = inside(base, path) ?
+  match Io.readAllBytes(physical) {
+    case Ok(held) => Ok(held)
+    case Err(reason) => Err(Docgen.error(Codes.FILE_UNREADABLE, path, 1, show(reason)))
+  }
+}
+
+/// The physical path of a relative path, refused when it leaves the folder or is a link.
+fn inside(base: Str, path: Str) -> Result[Str, Docgen.Diagnostic] {
+  if !Paths.relative(path) { return Err(Docgen.error(Codes.FILE_UNREADABLE, path, 1, "path is not a portable relative path")) }
+  let physical = match Fs.resolveInside(base, path) {
+    case Ok(found) => found
+    case Err(reason) => { return Err(Docgen.error(Codes.FILE_UNREADABLE, path, 1, show(reason))) }
+  }
+  match Fs.metadata(physical) {
+    case Ok(details) => {
+      if details.isSymbolicLink { return Err(Docgen.error(Codes.FILE_UNREADABLE, path, 1, "symbolic links are not read")) }
+      if details.size > MAX_BYTES { return Err(Docgen.error(Codes.FILE_UNREADABLE, path, 1, "file is larger than 32 MiB")) }
+      Ok(physical)
+    }
+    case Err(reason) => Err(Docgen.error(Codes.FILE_UNREADABLE, path, 1, show(reason)))
+  }
+}
+
+/// Files below a relative folder.
+fn walk(base: Str, relative: Str, skip: &Array[Str], depth: Int) -> Result[Array[Str], Array[Docgen.Diagnostic]] {
+  if depth > MAX_DEPTH { return Err([Docgen.error(Codes.FILE_UNREADABLE, relative, 1, "folders nest deeper than " + show(MAX_DEPTH))]) }
+  let directory = if relative.isEmpty() { base } else { Path.join(base, relative) }
+  let names = match Io.list(directory) {
+    case Ok(found) => List.sortBy(&found, |left: Str, right: Str| left < right)
+    case Err(reason) => { return Err([Docgen.error(Codes.FILE_UNREADABLE, if relative.isEmpty() { "." } else { relative }, 1, reason)]) }
+  }
+  var result: Array[Str] = []
+  for name in names {
+    let path = if relative.isEmpty() { name } else { relative + "/" + name }
+    if name.startsWith(".") || IGNORED.contains(name) || skip.contains(path) || !Paths.relative(path) { continue }
+    let details = match Fs.metadata(Path.join(directory, name)) {
+      case Ok(found) => found
+      case Err(_) => { continue }
+    }
+    if details.isSymbolicLink { continue }
+    if details.isDirectory { result = result.concat(walk(base, path, skip, depth + 1) ?) } else { result = result.push(path) }
+    if result.length() > MAX_FILES { return Err([Docgen.error(Codes.FILE_UNREADABLE, ".", 1, "project holds more than " + show(MAX_FILES) + " files")]) }
+  }
+  Ok(result)
+}

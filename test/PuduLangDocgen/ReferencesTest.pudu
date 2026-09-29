@@ -1,0 +1,59 @@
+/** @Docgen.References.Tests — identities stay unique and maps round-trip */
+module PuduLangDocgen.ReferencesTest
+
+import Std.Io as Io
+import Std.Map as Map
+import Std.Option as Option
+import Std.Test as Test
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.References as References
+
+/// A reference with a name equal to its last identity segment.
+fn reference(uid: Str, href: Str) -> Docgen.Reference {
+  let parts = uid.split(".")
+  Docgen.Reference{uid: uid, name: parts[parts.length() - 1], fullName: uid, href: href, kind: "module"}
+}
+
+/// Parsed references, or none when parsing fails.
+fn read(origin: Str, text: Str) -> Array[Docgen.Reference] {
+  match References.parse(origin, text) {
+    case Ok(found) => found
+    case Err(_) => []
+  }
+}
+
+/// The failure message of a map that does not parse.
+fn refused(text: Str) -> Str {
+  match References.parse("xrefmap.yml", text) {
+    case Ok(_) => "accepted"
+    case Err(reason) => reason
+  }
+}
+
+/// Runs every registry, encoding, and decoding contract.
+fn main() -> Int {
+  let own = [reference("A.B", "a/b.html"), reference("A.C", "a/c.html")]
+  let (found, problems) = References.registry(&own, &[reference("A.B", "https://x/b"), reference("Ext.D", "https://x/d")])
+  let (_dup, duplicates) = References.registry(&[reference("A.B", "one.html"), reference("A.B", "two.html")], &[])
+  let yaml = References.toYaml(&own.push(reference("Q.\"quoted\": yes", "q.html")), "https://site.example/")
+  let checks = Test.suite("References", &[
+      Test.equals("own identity wins", &Option.map(Map.get(&found, "A.B"), |held: Docgen.Reference| held.href), &Some("a/b.html")),
+      Test.equals("external added", &Option.map(Map.get(&found, "Ext.D"), |held: Docgen.Reference| held.href), &Some("https://x/d")),
+      Test.equals("no problems", &problems, &[]),
+      Test.equals("duplicate identity refused", &duplicates.map(|held: Docgen.Diagnostic| held.code), &[Codes.UID_DUPLICATE]),
+      Test.equals("yaml map", &References.toYaml(&[reference("A.B", "a/b.html")], ""), &"### YamlMime:XRefMap\nsorted: true\nreferences:\n- uid: A.B\n  name: B\n  fullName: A.B\n  href: a/b.html\n  type: module\n"),
+      Test.equals("yaml round trip with base", &read("xrefmap.yml", yaml).map(|held: Docgen.Reference| held.href), &["https://site.example/a/b.html", "https://site.example/a/c.html", "https://site.example/q.html"]),
+      Test.equals("quoted scalars survive", &read("xrefmap.yml", yaml)[2].uid, &"Q.\"quoted\": yes"),
+      Test.equals("json round trip", &read("xrefmap.json", References.toJson(&own, "")).map(|held: Docgen.Reference| held.uid), &["A.B", "A.C"]),
+      Test.equals("relative to remote origin", &read("https://docs.example/v1/xrefmap.yml", "references:\n- uid: X\n  href: x.html")[0].href, &"https://docs.example/v1/x.html"),
+      Test.equals("name defaults to uid", &read("m.yml", "references:\n- uid: X\n  href: x.html")[0].name, &"X"),
+      Test.equals("unsafe href refused", &refused("references:\n- uid: X\n  href: javascript:x"), &"reference X has an unsafe href"),
+      Test.equals("missing uid refused", &refused("references:\n- href: x.html"), &"a reference has no uid"),
+      Test.equals("not a mapping refused", &refused("- a"), &"cross-reference map must be a mapping with references"),
+      Test.equals("pages become references", &References.ofPages(&[Docgen.Page{path: "g.html", source: "g.md", kind: "article", title: "Guide", uid: "guide", summary: "", body: "", headings: [], links: [], meta: []}]), &[Docgen.Reference{uid: "guide", name: "Guide", fullName: "Guide", href: "g.html", kind: "article"}])
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

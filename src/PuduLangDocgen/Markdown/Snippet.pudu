@@ -1,0 +1,179 @@
+/** @Docgen.Markdown.Snippet — code excerpts selected by region, range, and emphasis */
+module PuduLangDocgen.Markdown.Snippet
+
+import Std.Option as Option
+
+/** @Docgen.Markdown.Selection — which lines of a source file an excerpt shows */
+export type Selection = { path: Str, region: Str, ranges: Array[(Int, Int)], highlight: Array[(Int, Int)], dedent: Int }
+
+/// Upper bound for an open-ended line range.
+const LAST_LINE: Int = 1000000000
+
+/// The file path and selection written in an excerpt destination.
+/// `#name` selects a region, `#L3-L9` a line range; `?name=`, `?range=`, `?highlight=`
+/// and `?dedent=` refine it.
+export fn selection(destination: Str) -> Result[Selection, Str] {
+  let hash = destination.split("#")
+  let beforeHash = hash[0]
+  let question = beforeHash.split("?")
+  var result = Selection{path: question[0], region: "", ranges: [], highlight: [], dedent: -1}
+  if result.path.isEmpty() { return Err("code excerpt names no file") }
+  var options: Array[Str] = if question.length() > 1 { question[1].split("&") } else { [] }
+  if hash.length() > 1 {
+    let fragment = hash[1].split("?")
+    if fragment.length() > 1 { options = options.concat(fragment[1].split("&")) }
+    let marker = fragment[0]
+    if marker.startsWith("L") && marker.drop(1).split("-L").length() <= 2 && !marker.drop(1).split("-L")[0].isEmpty() && digits(marker.drop(1).split("-L")[0]) {
+      result = Selection{..result, ranges: ranges(marker.drop(1).replace("-L", "-")) ?}
+    } else if !marker.isEmpty() { result = Selection{..result, region: marker} }
+  }
+  for option in options {
+    let pair = option.split("=")
+    if pair.length() != 2 { return Err("malformed excerpt option: " + option) }
+    let value = pair[1]
+    if pair[0] == "name" { result = Selection{..result, region: value} }
+      else if pair[0] == "range" { result = Selection{..result, ranges: ranges(value) ?} }
+      else if pair[0] == "highlight" { result = Selection{..result, highlight: ranges(value) ?} }
+      else if pair[0] == "dedent" {
+      if !digits(value) { return Err("dedent must be a whole number") }
+      result = Selection{..result, dedent: whole(value)}
+    } else { return Err("unknown excerpt option: " + pair[0]) }
+  }
+  Ok(result)
+}
+
+/// Line ranges written as `3`, `3-9`, or `12-`, separated by commas.
+export fn ranges(written: Str) -> Result[Array[(Int, Int)], Str] {
+  var result: Array[(Int, Int)] = []
+  for part in written.split(",") {
+    let bounds = part.trim().split("-")
+    if bounds.length() > 2 || !digits(bounds[0]) { return Err("malformed line range: " + part) }
+    let first = whole(bounds[0])
+    let last = if bounds.length() == 1 { first } else if bounds[1].isEmpty() { LAST_LINE } else if digits(bounds[1]) { whole(bounds[1]) } else { return Err("malformed line range: " + part) }
+    if first < 1 || last < first { return Err("malformed line range: " + part) }
+    result = result.push((first, last))
+  }
+  Ok(result)
+}
+
+/// The excerpt a selection takes from file text and the output lines it emphasizes.
+/// Region markers inside the excerpt are removed; common indentation is removed unless
+/// `dedent` names an exact amount.
+export fn extract(text: Str, chosen: &Selection) -> Result[(Str, Array[Int]), Str] {
+  let all = text.replace("\r\n", "\n").split("\n")
+  var numbered: Array[(Int, Str)] = []
+  if !chosen.region.isEmpty() {
+    var inside = false
+    var found = false
+    var closed = false
+    var number = 1
+    for line in all {
+      let (kind, name) = regionMarker(line)
+      if !closed && !inside && kind == "start" && name == chosen.region {
+        inside = true
+        found = true
+      } else if inside && kind == "end" && (name == chosen.region || name == "*") {
+        inside = false
+        closed = true
+      } else if inside && kind == "" {
+        numbered = numbered.push((number, line))
+      }
+      number = number + 1
+    }
+    if !found { return Err("region not found: " + chosen.region) }
+    if !closed { return Err("region is not closed: " + chosen.region) }
+  } else {
+    var number = 1
+    for line in all {
+      numbered = numbered.push((number, line))
+      number = number + 1
+    }
+  }
+  if !chosen.ranges.isEmpty() {
+    let base = if chosen.region.isEmpty() { 0 } else { 1 }
+    var kept: Array[(Int, Str)] = []
+    var position = 1
+    for (number, line) in numbered {
+      let key = if base == 1 { position } else { number }
+      if within(&chosen.ranges, key) { kept = kept.push((number, line)) }
+      position = position + 1
+    }
+    numbered = kept
+  }
+  if numbered.isEmpty() { return Err("code excerpt selects no lines") }
+  var lines: Array[Str] = []
+  for (_number, line) in numbered { lines = lines.push(line) }
+  lines = dedented(&lines, chosen.dedent)
+  var emphasized: Array[Int] = []
+  for position in 1..(lines.length() + 1) {
+    if within(&chosen.highlight, position) { emphasized = emphasized.push(position) }
+  }
+  Ok((lines.join("\n"), emphasized))
+}
+
+/// Whether a line number falls in any range.
+fn within(bounds: &Array[(Int, Int)], number: Int) -> Bool {
+  for (first, last) in *bounds {
+    if number >= first && number <= last { return true }
+  }
+  false
+}
+
+/// Digits read as a whole number; callers check them with `digits` first.
+fn whole(text: Str) -> Int { Option.unwrapOr(text.toInt(), 0) }
+
+/// Whether text is one or more ASCII digits.
+fn digits(text: Str) -> Bool {
+  if text.isEmpty() { return false }
+  for character in text.chars() {
+    if character < '0' || character > '9' { return false }
+  }
+  true
+}
+
+/// A region marker on a line as `("start", name)`, `("end", name)`, or `("", "")`.
+/// Markers are `#region name` / `#endregion` or `<name>` / `</name>` behind a comment leader.
+fn regionMarker(line: Str) -> (Str, Str) {
+  var body = line.trim()
+  for leader in ["<!--", "//", "/*", "--", "#", "'", ";", "%"] {
+    if body.startsWith(leader) && !body.startsWith("#region") && !body.startsWith("#endregion") {
+      body = body.drop(leader.length()).trim()
+    }
+  }
+  for trailer in ["-->", "*/"] {
+    if body.endsWith(trailer) { body = body.take(body.length() - trailer.length()).trim() }
+  }
+  if body.startsWith("#region ") { return ("start", body.drop(8).trim()) }
+  if body.startsWith("region ") { return ("start", body.drop(7).trim()) }
+  if body.startsWith("#endregion") || body == "endregion" || body.startsWith("endregion ") { return ("end", "*") }
+  if body.startsWith("</") && body.endsWith(">") && !body.contains(" ") { return ("end", body.drop(2).take(body.length() - 3)) }
+  if body.startsWith("<") && body.endsWith(">") && !body.contains(" ") && body.length() > 2 { return ("start", body.drop(1).take(body.length() - 2)) }
+  ("", "")
+}
+
+/// Lines with a fixed or common leading indentation removed.
+fn dedented(lines: &Array[Str], amount: Int) -> Array[Str] {
+  var common = amount
+  if common < 0 {
+    common = LAST_LINE
+    for line in *lines {
+      if !line.trim().isEmpty() {
+        var count = 0
+        for character in line.chars() {
+          if character != ' ' && character != '\t' { break }
+          count = count + 1
+        }
+        if count < common { common = count }
+      }
+    }
+    if common == LAST_LINE { common = 0 }
+  }
+  lines.map(fn(line: Str) -> Str {
+      var count = 0
+      for character in line.chars() {
+        if count >= common || (character != ' ' && character != '\t') { break }
+        count = count + 1
+      }
+      line.drop(count)
+    })
+}

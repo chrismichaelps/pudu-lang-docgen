@@ -1,0 +1,146 @@
+/** @Docgen.Api.Tests — Pudu declarations become linked reference pages */
+module PuduLangDocgen.ApiTest
+
+import Std.Io as Io
+import Std.Test as Test
+import PuduLangDocgen.Api.Catalog as Catalog
+import PuduLangDocgen.Api.Lexer as Lexer
+import PuduLangDocgen.Api.Model as Model
+import PuduLangDocgen.Api.Pages as Pages
+import PuduLangDocgen.Api.Parser as Parser
+import PuduLangDocgen.Api.Signature as Signature
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown.Phrase as Phrase
+
+/// A module exercising every declaration form.
+fn shapesSource() -> Str {
+  [
+    "/** @Demo.Shapes.Module — geometric shapes and their areas */",
+    "module Demo.Shapes",
+    "",
+    "import Demo.Units as Units",
+    "",
+    "/** @Demo.Shapes.Shape — a closed figure */",
+    "export type Shape = Circle(Int) | Square(Int)",
+    "",
+    "/// A point on the plane.",
+    "export type Point = \{",
+    "  /// Horizontal position.",
+    "  x: Int,",
+    "  y: Int",
+    "\}",
+    "",
+    "/// Measured width.",
+    "export type Width = Units.Length",
+    "",
+    "/// Anything with an area.",
+    "export trait Measured \{",
+    "  fn area(self: &Self) -> Int",
+    "\}",
+    "",
+    "impl Measured for Shape \{",
+    "  /// The shape's area.",
+    "  fn area(self: &Self) -> Int \{ 0 \}",
+    "\}",
+    "",
+    "/// The area of a shape in square units.",
+    "///",
+    "/// ## Examples",
+    "///",
+    "/// Circles round down.",
+    "export fn area(shape: &Shape, scale: Units.Length) -> Int \{",
+    "  let text = \"\{ nested \}\"",
+    "  0",
+    "\}",
+    "",
+    "/// Largest side accepted.",
+    "export const LIMIT: Int = 100",
+    "",
+    "fn hidden() -> Int \{ 1 \}",
+    ""
+  ].join("\n")
+}
+
+/// A module the demo imports from.
+const UNITS: Str = "module Demo.Units\n\n/// A length in millimetres.\nexport type Length = Millimetres(Int)\n"
+
+/// Catalog options publishing under `api` with source links.
+fn options() -> Catalog.Options {
+  Catalog.Options{dest: "api", includePrivate: false, include: [], exclude: [], sourceUrl: "https://src.example/\{path\}#L\{line\}", nested: false, separate: false}
+}
+
+/// The demo modules as selected for publication.
+fn units() -> Array[Model.Unit] {
+  Catalog.select(&[Parser.parse("src/Demo/Shapes.pudu", shapesSource()), Parser.parse("src/Demo/Units.pudu", UNITS)], &options())
+}
+
+/// Rendering context over the demo modules.
+fn context() -> Pages.Context {
+  let all = units()
+  var references: Array[(Str, Docgen.Reference)] = []
+  for reference in Catalog.references(&all, &options()) { references = references.push((reference.uid, reference)) }
+  Pages.Context{options: options(), references: mapOf(references), outputs: mapOf([]), settings: Phrase.rendering(), units: all}
+}
+
+/// Rendered pages of the shapes module.
+fn pages() -> Array[Docgen.Page] {
+  let all = units()
+  let (found, _problems) = Pages.pages(&all[0], &context())
+  found
+}
+
+/// The body of the page at a path.
+fn body(path: Str) -> Str {
+  for page in pages() {
+    if page.path == path { return page.body }
+  }
+  ""
+}
+
+/// Runs every lexing, parsing, selection, linking, and page contract.
+fn main() -> Int {
+  let shapes = Parser.parse("src/Demo/Shapes.pudu", shapesSource())
+  let members = shapes.members
+  let tokens = Lexer.tokens("/* a /* b */ c */ x \"s \{ \"in\" \} t\" 'y' '\\n' /// doc")
+  let checks = Test.suite("Api", &[
+      Test.equals("tokens skip nested comments and keep literals", &tokens.map(|token: Lexer.Token| token.text), &["x", "\"s \{ \"in\" \} t\"", "'y'", "'\\n'", "doc"]),
+      Test.equals("module identity and anchor text", &(shapes.uid, shapes.doc), &("Demo.Shapes", "Geometric shapes and their areas")),
+      Test.equals("imports", &shapes.imports, &[("Units", "Demo.Units")]),
+      Test.equals("declaration kinds", &members.map(|member: Model.Member| member.kind), &["union", "record", "alias", "trait", "function", "constant", "function"]),
+      Test.equals("exported flags", &members.map(|member: Model.Member| member.exported), &[true, true, true, true, true, true, false]),
+      Test.equals("variants", &members[0].members.map(|member: Model.Member| member.signature), &["Circle(Int)", "Square(Int)"]),
+      Test.equals("fields and their docs", &members[1].members.map(|member: Model.Member| (member.name, member.returns, member.doc)), &[("x", "Int", "Horizontal position."), ("y", "Int", "")]),
+      Test.equals("alias target", &members[2].returns, &"Units.Length"),
+      Test.equals("trait methods", &members[3].members.map(|member: Model.Member| member.signature), &["fn area(self: &Self) -> Int"]),
+      Test.equals("function signature", &members[4].signature, &"fn area(shape: &Shape, scale: Units.Length) -> Int"),
+      Test.equals("function parameters", &members[4].parameters, &[Model.Parameter{name: "shape", kind: "&Shape"}, Model.Parameter{name: "scale", kind: "Units.Length"}]),
+      Test.equals("constant value shown", &members[5].signature, &"const LIMIT: Int = 100"),
+      Test.equals("implementation", &shapes.implementations.map(|held: Model.Implementation| (held.contract, held.target, held.methods.length())), &[("Measured", "Shape", 1)]),
+      Test.equals("summary and remarks", &(Model.summary(members[4].doc), Model.remarks(members[4].doc)), &("The area of a shape in square units.", "## Examples\n\nCircles round down.")),
+      Test.equals("private members dropped", &units()[0].members.length(), &6),
+      Test.equals("private members kept on request", &Catalog.select(&[shapes], &Catalog.Options{..options(), includePrivate: true})[0].members.length(), &7),
+      Test.equals("exclude patterns", &Catalog.select(&[shapes], &Catalog.Options{..options(), exclude: ["Demo.Shapes.area", "Demo.Shapes.LIMIT"]})[0].members.length(), &4),
+      Test.equals("include patterns keep the module", &Catalog.select(&[shapes], &Catalog.Options{..options(), include: ["Demo.Shapes.Point"]})[0].members.map(|member: Model.Member| member.name), &["Point"]),
+      Test.equals("reference destinations", &Catalog.references(&units(), &options()).map(|reference: Docgen.Reference| reference.href).slice(0, 6), &["api/Demo.Shapes.html", "api/Demo.Shapes.Shape.html", "api/Demo.Shapes.Shape.html#Circle", "api/Demo.Shapes.Shape.html#Square", "api/Demo.Shapes.Point.html", "api/Demo.Shapes.Point.html#x"]),
+      Test.equals("toc lists types", &Catalog.toc(&units(), &options())[0].children.map(|item: Docgen.TocItem| item.title), &["Measured", "Point", "Shape", "Width"]),
+      Test.equals("source link", &Catalog.sourceLink(&options(), "src/a.pudu", 7), &"https://src.example/src/a.pudu#L7"),
+      Test.equals("signature links through imports", &Signature.html(&shapes, "fn f(s: &Shape) -> Units.Length", &context().references, "api/Demo.Shapes.html"), &"<span class=\"hl-k\">fn</span> f(s: &amp;<a class=\"xref\" href=\"Demo.Shapes.Shape.html\">Shape</a>) -&gt; <a class=\"xref\" href=\"Demo.Units.Length.html\">Units.Length</a>"),
+      Test.equals("unknown names stay text", &Signature.resolve(&shapes, "Str", &context().references), &""),
+      Test.equals("pages per module and type", &pages().map(|page: Docgen.Page| page.path), &["api/Demo.Shapes.html", "api/Demo.Shapes.Shape.html", "api/Demo.Shapes.Point.html", "api/Demo.Shapes.Width.html", "api/Demo.Shapes.Measured.html"]),
+      Test.that("module page sections", body("api/Demo.Shapes.html").contains("<h2 id=\"types\">") && body("api/Demo.Shapes.html").contains("<h2 id=\"functions\">") && body("api/Demo.Shapes.html").contains("<h3 id=\"area\">")),
+      Test.that("demoted doc headings", body("api/Demo.Shapes.html").contains("<h4 id=\"examples\">Examples")),
+      Test.that("parameters listed", body("api/Demo.Shapes.html").contains("<dt><code>scale</code></dt>")),
+      Test.that("source links shown", body("api/Demo.Shapes.html").contains("https://src.example/src/Demo/Shapes.pudu#L34")),
+      Test.that("variants table", body("api/Demo.Shapes.Shape.html").contains("<tr id=\"Circle\"><td><code>Circle</code></td>")),
+      Test.that("implemented traits", body("api/Demo.Shapes.Shape.html").contains("<h2 id=\"implements\">") && body("api/Demo.Shapes.Shape.html").contains("Demo.Shapes.Measured")),
+      Test.that("trait implementors", body("api/Demo.Shapes.Measured.html").contains("<h2 id=\"implementations\">")),
+      Test.that("related functions", body("api/Demo.Shapes.Shape.html").contains("<h2 id=\"related\">")),
+      Test.that("field docs rendered", body("api/Demo.Shapes.Point.html").contains("<p>Horizontal position.</p>")),
+      Test.equals("nested module navigation", &Catalog.toc(&units(), &Catalog.Options{..options(), nested: true}).map(|item: Docgen.TocItem| (item.title, item.href, item.children.map(|child: Docgen.TocItem| child.title))), &[("Demo", "", ["Shapes", "Units"])]),
+      Test.equals("separate member pages", &Catalog.references(&units(), &Catalog.Options{..options(), separate: true}).filter(|reference: Docgen.Reference| reference.uid == "Demo.Shapes.area").map(|reference: Docgen.Reference| reference.href), &["api/Demo.Shapes.area.html"]),
+      Test.equals("kind names", &[Pages.kindName("union"), Pages.kindName("alias"), Pages.kindName("other")], &["Union", "Type alias", "other"])
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

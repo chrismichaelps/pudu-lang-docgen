@@ -1,0 +1,31 @@
+/** @Docgen.Markdown.Crossref — cross references with display options read from their written forms */
+module PuduLangDocgen.Markdown.Crossref
+
+import PuduLangDocgen.Markdown.Lexicon as Lexicon
+import PuduLangDocgen.Markdown.Syntax as Syntax
+
+/// A cross reference written as `uid?displayProperty=fullName&text=Label`; given link text
+/// wins over the `text` option.
+export fn span(written: Str, children: Array[Syntax.Inline], line: Int, optional: Bool) -> Syntax.Inline {
+  let parts = written.split("?")
+  var display = "name"
+  var text = children
+  if parts.length() > 1 {
+    for option in parts[1].split("&") {
+      let pair = option.split("=")
+      if pair.length() == 2 && pair[0] == "displayProperty" { display = pair[1] }
+      if pair.length() == 2 && pair[0] == "text" && text.isEmpty() { text = [Syntax.Text(pair[1].replace("+", " ").replace("%20", " "))] }
+    }
+  }
+  Syntax.Xref(Syntax.XrefSpan{uid: parts[0].replace("%2A", "*").replace("%60", "`"), text: text, display: display, line: line, optional: optional})
+}
+
+/// The `<xref uid="..." />` element form, read from the text between its angle brackets.
+export fn element(inner: Str, line: Int) -> Option[Syntax.Inline] {
+  let uid = Lexicon.attribute(inner, "uid")
+  if uid.isEmpty() { return None }
+  let text = Lexicon.attribute(inner, "text")
+  let display = Lexicon.attribute(inner, "displayProperty")
+  let children: Array[Syntax.Inline] = if text.isEmpty() { [] } else { [Syntax.Text(text)] }
+  Some(Syntax.Xref(Syntax.XrefSpan{uid: uid, text: children, display: if display.isEmpty() { "name" } else { display }, line: line, optional: false}))
+}

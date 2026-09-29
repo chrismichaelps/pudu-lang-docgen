@@ -1,0 +1,209 @@
+/** @Docgen.Navigation.Resolve — tables of contents bound to published pages */
+module PuduLangDocgen.Navigation.Resolve
+
+import Std.Map as Map
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Navigation as Navigation
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Navigation.Links — where a table of contents may point */
+export type Links = { tocs: Map[Str, Array[Docgen.TocItem]], outputs: Map[Str, Str], references: Map[Str, Docgen.Reference], titles: Map[Str, Str] }
+
+/** @Docgen.Navigation.Candidate — a published table of contents competing to govern pages */
+export type Candidate = { output: Str, order: Int, pages: Array[Str] }
+
+/// Deepest chain of tables of contents that include one another.
+const MAX_NESTING: Int = 16
+
+/// File names tried, in order, when an item links to a folder.
+const TOC_NAMES: Array[Str] = ["toc.yml", "toc.yaml", "toc.json", "toc.md"]
+
+/// Items of the table of contents at a project-relative path with every destination made
+/// root-relative to the published site. Folder links and links to other tables of contents
+/// bring in those items as children.
+export fn resolve(path: Str, links: &Links) -> (Array[Docgen.TocItem], Array[Docgen.Diagnostic]) {
+  let written = Map.getOr(&links.tocs, path, [])
+  entries(path, &written, links, [path])
+}
+
+/// The published path of a table of contents: its source path ending in `toc.json`.
+export fn outputOf(path: Str) -> Str {
+  let directory = Paths.directoryOf(path)
+  if directory.isEmpty() { "toc.json" } else { directory + "/toc.json" }
+}
+
+/// The table of contents governing a page, or the empty text. Tables that link the page win,
+/// lower `order` first and then the nearest folder; otherwise the nearest table in a folder
+/// holding the page is used, again preferring lower `order`.
+export fn governing(page: Str, candidates: &Array[Candidate]) -> Str {
+  var best = ""
+  var bestRank = (2, 0, 0)
+  for candidate in *candidates {
+    let directory = Paths.directoryOf(candidate.output)
+    let linked = candidate.pages.contains(page)
+    let contains = directory.isEmpty() || page.startsWith(directory + "/")
+    if !linked && !contains { continue }
+    let jumps = distance(Paths.directoryOf(page), directory)
+    let rank = (if linked { 0 } else { 1 }, candidate.order, jumps)
+    if best.isEmpty() || before(rank, bestRank) {
+      best = candidate.output
+      bestRank = rank
+    }
+  }
+  best
+}
+
+/// Whether one ranking comes before another, comparing each part in turn.
+fn before(left: (Int, Int, Int), right: (Int, Int, Int)) -> Bool {
+  let (a, b, c) = left
+  let (x, y, z) = right
+  a < x || (a == x && (b < y || (b == y && c < z)))
+}
+
+/// Folder steps between two directories through their common ancestor.
+fn distance(from: Str, to: Str) -> Int {
+  let left = if from.isEmpty() { [] } else { from.split("/") }
+  let right = if to.isEmpty() { [] } else { to.split("/") }
+  var common = 0
+  while common < left.length() && common < right.length() && left[common] == right[common] { common = common + 1 }
+  left.length() + right.length() - 2 * common
+}
+
+/// Local pages a tree links, without fragments.
+export fn pagesOf(items: &Array[Docgen.TocItem]) -> Array[Str] {
+  readingOrder(items).map(|item: Docgen.TocItem| Paths.pathOf(item.href))
+}
+
+/// The items from the top of a tree down to the one linking a page.
+export fn trail(items: &Array[Docgen.TocItem], page: Str) -> Array[Docgen.TocItem] {
+  for item in *items {
+    if Paths.pathOf(item.href) == page { return [item] }
+    let below = trail(&item.children, page)
+    if !below.isEmpty() { return [item].concat(below) }
+  }
+  []
+}
+
+/// The pages before and after a page in reading order, when it is listed.
+export fn neighbors(items: &Array[Docgen.TocItem], page: Str) -> (Option[Docgen.TocItem], Option[Docgen.TocItem]) {
+  let order = readingOrder(items)
+  var index = 0
+  for item in order {
+    if Paths.pathOf(item.href) == page {
+      let previous = if index > 0 { Some(order[index - 1]) } else { None }
+      let next = if index + 1 < order.length() { Some(order[index + 1]) } else { None }
+      return (previous, next)
+    }
+    index = index + 1
+  }
+  (None, None)
+}
+
+/// Local pages in the order a reader meets them, each listed once.
+export fn readingOrder(items: &Array[Docgen.TocItem]) -> Array[Docgen.TocItem] {
+  var result: Array[Docgen.TocItem] = []
+  var seen: Array[Str] = []
+  for item in flattened(items) {
+    let path = Paths.pathOf(item.href)
+    if !path.isEmpty() && !Paths.remote(item.href) && !seen.contains(path) {
+      result = result.push(item)
+      seen = seen.push(path)
+    }
+  }
+  result
+}
+
+/// Items in depth-first order.
+fn flattened(items: &Array[Docgen.TocItem]) -> Array[Docgen.TocItem] {
+  var result: Array[Docgen.TocItem] = []
+  for item in *items { result = result.push(item).concat(flattened(&item.children)) }
+  result
+}
+
+/// Items of one table of contents resolved against the published docset.
+fn entries(path: Str, items: &Array[Docgen.TocItem], links: &Links, trailOf: Array[Str]) -> (Array[Docgen.TocItem], Array[Docgen.Diagnostic]) {
+  var result: Array[Docgen.TocItem] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  for item in *items {
+    let (resolved, found) = entry(path, &item, links, trailOf)
+    problems = problems.concat(found)
+    match resolved {
+      case Some(held) => { result = result.push(held) }
+      case None => {}
+    }
+  }
+  (result, problems)
+}
+
+/// One item resolved; a link-only placeholder for a nested table dissolves into its items.
+fn entry(path: Str, item: &Docgen.TocItem, links: &Links, trailOf: Array[Str]) -> (Option[Docgen.TocItem], Array[Docgen.Diagnostic]) {
+  var problems: Array[Docgen.Diagnostic] = []
+  var title = item.title
+  var href = ""
+  var children: Array[Docgen.TocItem] = []
+  if !item.uid.isEmpty() {
+    match Map.get(&links.references, item.uid) {
+      case Some(reference) => {
+        href = reference.href
+        if title.isEmpty() { title = reference.name }
+      }
+      case None => { problems = problems.push(Docgen.warning(Codes.TOC_UID_UNKNOWN, path, 1, "table of contents names an unknown uid: " + item.uid)) }
+    }
+  }
+  var local: Array[Docgen.TocItem] = []
+  for child in item.children {
+    if child.title.isEmpty() && child.uid.isEmpty() && (child.href.endsWith("/") || Navigation.isToc(Paths.pathOf(child.href))) {
+      let (nested, found) = nestedItems(path, child.href, links, trailOf)
+      local = local.concat(nested)
+      problems = problems.concat(found)
+    } else { local = local.push(child) }
+  }
+  let (resolvedChildren, childProblems) = entries(path, &local, links, trailOf)
+  children = resolvedChildren
+  problems = problems.concat(childProblems)
+  if href.isEmpty() && !item.href.isEmpty() {
+    if Paths.remote(item.href) { href = item.href } else if item.href.endsWith("/") || Navigation.isToc(Paths.pathOf(item.href)) {
+      let (nested, found) = nestedItems(path, item.href, links, trailOf)
+      problems = problems.concat(found)
+      if children.isEmpty() { children = nested }
+      href = firstPage(&nested)
+    } else {
+      match Paths.join(Paths.directoryOf(path), Paths.pathOf(item.href)) {
+        case Ok(target) => match Map.get(&links.outputs, target) {
+          case Some(published) => { href = published + Paths.suffixOf(item.href) }
+          case None => { problems = problems.push(Docgen.warning(Codes.TOC_TARGET_MISSING, path, 1, "table of contents target not found: " + target)) }
+        }
+        case Err(reason) => { problems = problems.push(Docgen.warning(Codes.TOC_TARGET_MISSING, path, 1, reason + ": " + item.href)) }
+      }
+    }
+  }
+  if title.isEmpty() && !href.isEmpty() { title = Map.getOr(&links.titles, Paths.pathOf(href), "") }
+  if title.isEmpty() || (href.isEmpty() && children.isEmpty()) { return (None, problems) }
+  (Some(Docgen.TocItem{title: title, href: href, uid: item.uid, expanded: item.expanded, children: children}), problems)
+}
+
+/// Items of the table of contents a folder or file link names, guarded against cycles.
+fn nestedItems(path: Str, written: Str, links: &Links, trailOf: Array[Str]) -> (Array[Docgen.TocItem], Array[Docgen.Diagnostic]) {
+  let target = match Paths.join(Paths.directoryOf(path), Paths.pathOf(written)) {
+    case Ok(found) => found
+    case Err(reason) => { return ([], [Docgen.warning(Codes.TOC_TARGET_MISSING, path, 1, reason + ": " + written)]) }
+  }
+  var located = ""
+  if written.endsWith("/") {
+    for name in TOC_NAMES {
+      if located.isEmpty() && Map.containsKey(&links.tocs, target + "/" + name) { located = target + "/" + name }
+    }
+  } else if Map.containsKey(&links.tocs, target) { located = target }
+  if located.isEmpty() { return ([], [Docgen.warning(Codes.TOC_TARGET_MISSING, path, 1, "no table of contents found at " + written)]) }
+  if trailOf.contains(located) { return ([], [Docgen.error(Codes.TOC_CYCLE, path, 1, "tables of contents include each other: " + trailOf.push(located).join(" -> "))]) }
+  if trailOf.length() >= MAX_NESTING { return ([], [Docgen.error(Codes.TOC_CYCLE, path, 1, "tables of contents nest deeper than " + show(MAX_NESTING))]) }
+  let items = Map.getOr(&links.tocs, located, [])
+  entries(located, &items, links, trailOf.push(located))
+}
+
+/// The first local page a tree links, or the empty text.
+fn firstPage(items: &Array[Docgen.TocItem]) -> Str {
+  let order = readingOrder(items)
+  if order.isEmpty() { "" } else { order[0].href }
+}

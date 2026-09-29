@@ -1,0 +1,118 @@
+/** @Docgen.Build.Tests — whole-site plans validate before any output is produced */
+module PuduLangDocgen.BuildTest
+
+import Std.Io as Io
+import Std.Test as Test
+import PuduLangDocgen.Api.Parser as Parser
+import PuduLangDocgen.Build as Build
+import PuduLangDocgen.Configuration as Configuration
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+
+/// Project files of the sample site.
+fn files() -> Array[(Str, Str)] {
+  [
+    ("docs/index.md", "---\nuid: home\ntitle: Welcome\n---\nRead the [guide](guide/start.md#install) or <xref:Demo.Shapes>.\n\n## Overview\n\nText."),
+    ("docs/guide/start.md", "# Start\n\n## Install\n\n![Logo](../images/logo.png)\n\nSee @home and [bad](missing.md)."),
+    ("docs/guide/moved.md", "---\nredirect_url: start.md\n---\n"),
+    ("docs/toc.yml", "- name: Home\n  href: index.md\n- name: Guide\n  href: guide/\n- name: API\n  href: api/\n- name: Pets\n  href: rest/pets.yml"),
+    ("docs/guide/toc.yml", "- href: start.md"),
+    ("docs/rest/pets.yml", "openapi: 3.0.0\ninfo:\n  title: Pets\npaths:\n  /pets:\n    get:\n      operationId: list\n      responses:\n        '200':\n          description: ok"),
+    ("docs/overwrite/shapes.md", "---\nuid: Demo.Shapes.area\nsummary: *content\n---\nComputes the **area**.")
+  ]
+}
+
+/// A module documented by the sample site.
+fn source() -> Str {
+  "module Demo.Shapes\n\n/// A figure.\nexport type Shape = Circle(Int) | Square(Int)\n\n/// Area.\nexport fn area(shape: &Shape) -> Int \{ 0 \}\n"
+}
+
+/// The sample site's configuration with overridable parts.
+fn config(extra: Str) -> Configuration.Config {
+  let text = "\{\"metadata\": [\{\"src\": [\{\"files\": \"src/**/*.pudu\"\}], \"dest\": \"api\"\}], \"build\": \{\"content\": [\{\"files\": [\"**/*.md\", \"**/toc.yml\", \"rest/*.yml\"], \"exclude\": [\"overwrite/**\"], \"src\": \"docs\"\}], \"resource\": [\{\"files\": \"images/**\", \"src\": \"docs\"\}], \"overwrite\": [\{\"files\": \"overwrite/*.md\", \"src\": \"docs\"\}], \"globalMetadata\": \{\"_appTitle\": \"Demo\", \"_baseUrl\": \"https://docs.example/\"\}, \"sitemap\": \{\"baseUrl\": \"https://docs.example\"\}" + extra + "\}\}"
+  match Configuration.parse("docgen.json", text) {
+    case Ok(found) => found
+    case Err(problems) => {
+      let _said = Io.writeErrorLine(show(problems))
+      Configuration.defaults()
+    }
+  }
+}
+
+/// The sample site as build input.
+fn input(extra: Str) -> Build.Input {
+  let all = files()
+  var paths: Array[Str] = ["docs/images/logo.png", "src/Demo/Shapes.pudu"]
+  for (path, _text) in all { paths = paths.push(path) }
+  Build.Input {
+    config: config(extra), paths: paths, files: mapOf(all), resources: [("docs/images/logo.png", Docgen.Resource{path: "images/logo.png", content: "PNG".toBytes()})],
+    units: [[Parser.parse("src/Demo/Shapes.pudu", source())]], external: [], template: [], assets: [], history: mapOf([("docs/index.md", "2026-09-01")]),
+    repository: Configuration.Contribution{repo: "https://github.com/example/docs", branch: "main", path: ""}, diagrams: mapOf([]), generator: "0.1.0", today: "2026-09-29"
+  }
+}
+
+/// A successful plan, or an empty one.
+fn planned(extra: Str) -> Docgen.Plan {
+  match Build.plan(&input(extra), &Build.extensions()) {
+    case Ok(found) => found
+    case Err(problems) => {
+      for problem in problems { let _said = Io.writeErrorLine(Docgen.describe(&problem)) }
+      Docgen.Plan{artifacts: [], resources: [], diagnostics: []}
+    }
+  }
+}
+
+/// The text of a planned artifact.
+fn artifact(plan: &Docgen.Plan, path: Str) -> Str {
+  for held in plan.artifacts {
+    if held.path == path { return held.content }
+  }
+  ""
+}
+
+/// Codes of a failed plan.
+fn failures(extra: Str) -> Array[Str] {
+  match Build.plan(&input(extra), &Build.extensions()) {
+    case Ok(_) => []
+    case Err(problems) => problems.map(|problem: Docgen.Diagnostic| problem.code)
+  }
+}
+
+/// Runs every whole-site planning contract.
+fn main() -> Int {
+  let plan = planned("")
+  let paths = plan.artifacts.map(|held: Docgen.Artifact| held.path)
+  let home = artifact(&plan, "index.html")
+  let start = artifact(&plan, "guide/start.html")
+  let checks = Test.suite("Build", &[
+      Test.equals("artifacts", &paths, &["404.html", "_assets/site.css", "_assets/site.js", "api/Demo.Shapes.Shape.html", "api/Demo.Shapes.html", "api/toc.json", "guide/moved.html", "guide/start.html", "guide/toc.json", "index.html", "index.json", "manifest.json", "rest/pets.html", "sitemap.xml", "toc.json", "xrefmap.yml"]),
+      Test.equals("resources copied", &plan.resources.map(|held: Docgen.Resource| held.path), &["images/logo.png"]),
+      Test.equals("warnings travel with the plan", &plan.diagnostics.map(|held: Docgen.Diagnostic| held.code), &[Codes.LINK_BROKEN]),
+      Test.that("title with site suffix", home.contains("<title>Welcome | Demo</title>")),
+      Test.that("metadata title becomes the heading", home.contains("<h1 id=\"welcome\">Welcome</h1>")),
+      Test.that("navbar from the root table", home.contains("<a href=\"guide/start.html\">Guide</a>") && home.contains("<a href=\"api/Demo.Shapes.html\">API</a>")),
+      Test.that("xref to API page", home.contains("<a class=\"xref\" href=\"api/Demo.Shapes.html\">Shapes</a>")),
+      Test.that("edit link", home.contains("https://github.com/example/docs/blob/main/docs/index.md")),
+      Test.that("last updated", home.contains("<time datetime=\"2026-09-01\">")),
+      Test.that("canonical address", home.contains("<link rel=\"canonical\" href=\"https://docs.example/index.html\">")),
+      Test.that("governing table in the folder", start.contains("aria-current=\"page\">Start</a>")),
+      Test.that("breadcrumb trail", start.contains("<a href=\"start.html\">Guide</a>") || start.contains("Guide</a></li>")),
+      Test.that("image resolved from nested page", start.contains("src=\"../images/logo.png\"")),
+      Test.that("mention resolved", start.contains("<a class=\"xref\" href=\"../index.html\">Welcome</a>")),
+      Test.that("redirect page", artifact(&plan, "guide/moved.html").contains("url=start.md") || artifact(&plan, "guide/moved.html").contains("refresh")),
+      Test.that("overwrite replaced summary", artifact(&plan, "api/Demo.Shapes.html").contains("Computes the <strong>area</strong>.")),
+      Test.that("rest page", artifact(&plan, "rest/pets.html").contains("<span class=\"method method-get\">GET</span>")),
+      Test.that("not found page uses the base path", artifact(&plan, "404.html").contains("href=\"/_assets/site.css\"")),
+      Test.that("search index", artifact(&plan, "index.json").contains("\"href\":\"guide/start.html\"")),
+      Test.that("sitemap dates", artifact(&plan, "sitemap.xml").contains("<loc>https://docs.example/index.html</loc>\n    <lastmod>2026-09-01</lastmod>")),
+      Test.that("xrefmap", artifact(&plan, "xrefmap.yml").contains("- uid: home\n  name: Welcome")),
+      Test.that("manifest version", artifact(&plan, "manifest.json").contains("\"version\": \"0.1.0\"")),
+      Test.equals("warnings as errors", &failures(", \"warningsAsErrors\": true"), &[Codes.LINK_BROKEN]),
+      Test.equals("rules silence codes", &planned(", \"rules\": \{\"DG123\": \"off\"\}").diagnostics, &[]),
+      Test.equals("rules raise codes", &failures(", \"rules\": \{\"DG123\": \"error\"\}"), &[Codes.LINK_BROKEN]),
+      Test.that("model export", planned(", \"exportRawModel\": true").artifacts.filter(|held: Docgen.Artifact| held.path == "index.html.raw.json").length() == 1)
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

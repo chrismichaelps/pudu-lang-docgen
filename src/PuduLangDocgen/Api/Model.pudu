@@ -1,0 +1,60 @@
+/** @Docgen.Api.Model — declarations of Pudu modules as documented reference items */
+module PuduLangDocgen.Api.Model
+
+/** @Docgen.Api.Parameter — one named parameter and its written type */
+export type Parameter = { name: Str, kind: Str }
+
+/** @Docgen.Api.Member — a declaration: function, type, trait, constant, field, variant, or method */
+export type Member = {
+  uid: Str,
+  name: Str,
+  kind: Str,
+  signature: Str,
+  doc: Str,
+  line: Int,
+  exported: Bool,
+  parameters: Array[Parameter],
+  returns: Str,
+  members: Array[Member]
+}
+
+/** @Docgen.Api.Implementation — a trait implemented for a type, with documented methods */
+export type Implementation = { contract: Str, target: Str, line: Int, methods: Array[Member] }
+
+/** @Docgen.Api.Unit — one module: its documentation, imports, declarations, and implementations */
+export type Unit = {
+  uid: Str,
+  path: Str,
+  doc: Str,
+  line: Int,
+  imports: Array[(Str, Str)],
+  members: Array[Member],
+  implementations: Array[Implementation]
+}
+
+/// Whether a member kind names a type-like declaration with a page of its own.
+export fn isType(kind: Str) -> Bool {
+  kind == "record" || kind == "union" || kind == "alias" || kind == "opaque" || kind == "trait"
+}
+
+/// The first paragraph of documentation text.
+export fn summary(doc: Str) -> Str {
+  var lines: Array[Str] = []
+  for line in doc.split("\n") {
+    if line.trim().isEmpty() {
+      if !lines.isEmpty() { break }
+    } else if line.trim().startsWith("#") || line.trim().startsWith("```") {
+      break
+    } else { lines = lines.push(line.trim()) }
+  }
+  lines.join(" ")
+}
+
+/// Documentation after its first paragraph.
+export fn remarks(doc: Str) -> Str {
+  let lines = doc.split("\n")
+  var index = 0
+  while index < lines.length() && lines[index].trim().isEmpty() { index = index + 1 }
+  while index < lines.length() && !lines[index].trim().isEmpty() && !lines[index].trim().startsWith("#") && !lines[index].trim().startsWith("```") { index = index + 1 }
+  lines.slice(index, lines.length()).join("\n").trim()
+}

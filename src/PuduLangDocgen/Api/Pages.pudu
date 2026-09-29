@@ -1,0 +1,238 @@
+/** @Docgen.Api.Pages — reference pages for modules and the types they declare */
+module PuduLangDocgen.Api.Pages
+
+import Std.Map as Map
+import PuduLangDocgen.Api.Catalog as Catalog
+import PuduLangDocgen.Api.Model as Model
+import PuduLangDocgen.Api.Signature as Signature
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown as Markdown
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Api.Context — everything reference pages link against */
+export type Context = { options: Catalog.Options, references: Map[Str, Docgen.Reference], outputs: Map[Str, Str], settings: Phrase.Rendering, units: Array[Model.Unit] }
+
+/** @Docgen.Api.Body — page HTML with the sections, links, and findings gathered on the way */
+type Body = { pieces: Array[Str], headings: Array[Docgen.Heading], links: Array[Docgen.Link], diagnostics: Array[Docgen.Diagnostic] }
+
+/// Section titles of a module page, in page order, with the member kinds each lists.
+const SECTIONS: Array[(Str, Str, Array[Str])] = [
+  ("types", "Types", ["record", "union", "alias", "opaque"]), ("traits", "Traits", ["trait"]),
+  ("functions", "Functions", ["function"]), ("constants", "Constants", ["constant"])
+]
+
+/// Display names of member kinds.
+const KIND_NAMES: Array[(Str, Str)] = [
+  ("record", "Record"), ("union", "Union"), ("alias", "Type alias"), ("opaque", "Opaque type"), ("trait", "Trait"),
+  ("function", "Function"), ("constant", "Constant"), ("method", "Method")
+]
+
+/// The module page and one page per type the module declares.
+export fn pages(unit: &Model.Unit, context: &Context) -> (Array[Docgen.Page], Array[Docgen.Diagnostic]) {
+  let (first, found) = modulePage(unit, context)
+  var result = [first]
+  var problems = found
+  for member in unit.members {
+    if Model.isType(member.kind) || context.options.separate {
+      let (page, more) = if Model.isType(member.kind) { typePage(unit, &member, context) } else { memberPage(unit, &member, context) }
+      result = result.push(page)
+      problems = problems.concat(more)
+    }
+  }
+  (result, problems)
+}
+
+/// The display name of a member kind.
+export fn kindName(kind: Str) -> Str {
+  for (key, name) in KIND_NAMES {
+    if key == kind { return name }
+  }
+  kind
+}
+
+/// An empty body.
+fn start() -> Body { Body{pieces: [], headings: [], links: [], diagnostics: []} }
+
+/// A body with HTML appended.
+fn emit(body: Body, text: Str) -> Body { Body{..body, pieces: body.pieces.push(text)} }
+
+/// A body with a titled section heading appended and recorded for the page outline.
+fn section(body: Body, level: Int, id: Str, title: Str) -> Body {
+  let tag = "h" + show(level)
+  let recorded = Body{..body, headings: body.headings.push(Docgen.Heading{id: id, title: title, level: level})}
+  emit(recorded, "<" + tag + " id=\"" + Paths.escape(id) + "\">" + Paths.escape(title) + "<a class=\"anchor\" href=\"#" + Paths.escape(id) + "\" aria-label=\"Link to this section\"></a></" + tag + ">\n")
+}
+
+/// Documentation rendered as HTML with headings demoted below the page's own sections.
+fn documentation(body: Body, text: Str, unit: &Model.Unit, page: Str, line: Int, context: &Context) -> Body {
+  if text.trim().isEmpty() { return body }
+  let located = Phrase.Scope{page: page, source: unit.path, outputs: context.outputs, references: context.references, settings: context.settings}
+  let rendered = Markdown.fragment(text, &located, 2)
+  let found = rendered.diagnostics.map(|held: Docgen.Diagnostic| Docgen.Diagnostic{..held, line: line})
+  let recorded = Body{..body, links: body.links.concat(rendered.links), diagnostics: body.diagnostics.concat(found)}
+  emit(recorded, "<div class=\"api-doc\">\n" + rendered.html + "</div>\n")
+}
+
+/// The source link paragraph of a declaration, when a pattern is configured.
+fn source(body: Body, unit: &Model.Unit, line: Int, context: &Context) -> Body {
+  let href = Catalog.sourceLink(&context.options, unit.path, line)
+  if href.isEmpty() { body } else { emit(body, "<p class=\"api-source\"><a class=\"external\" href=\"" + Paths.escape(href) + "\">View source</a></p>\n") }
+}
+
+/// A declaration in a code block with types linked.
+fn declaration(body: Body, unit: &Model.Unit, signature: Str, page: Str, context: &Context) -> Body {
+  emit(body, "<div class=\"api-signature\"><pre><code class=\"lang-pudu\">" + Signature.html(unit, signature, &context.references, page) + "</code></pre></div>\n")
+}
+
+/// The page title block with the kind shown above the name.
+fn heading(body: Body, kind: Str, title: Str) -> Body {
+  emit(body, "<div class=\"api-heading\"><p class=\"api-kind\">" + Paths.escape(kind) + "</p><h1 id=\"" + Paths.escape(Paths.slug(title)) + "\">" + Paths.escape(title) + "</h1></div>\n")
+}
+
+/// A page from a finished body.
+fn finish(body: Body, path: Str, unit: &Model.Unit, kind: Str, title: Str, uid: Str, summary: Str) -> (Docgen.Page, Array[Docgen.Diagnostic]) {
+  let page = Docgen.Page{path: path, source: unit.path, kind: kind, title: title, uid: uid, summary: summary, body: body.pieces.join(""), headings: body.headings, links: body.links, meta: []}
+  (page, body.diagnostics)
+}
+
+/// A table linking members to their pages or sections with their summaries.
+fn summaryTable(body: Body, members: &Array[Model.Member], page: Str, context: &Context) -> Body {
+  var held = emit(body, "<div class=\"table-wrapper\"><table class=\"api-table\"><thead><tr><th>Name</th><th>Description</th></tr></thead><tbody>\n")
+  for member in *members {
+    let href = match Map.get(&context.references, member.uid) {
+      case Some(found) => Paths.between(page, found.href)
+      case None => "#" + member.name
+    }
+    held = emit(held, "<tr><td><a class=\"xref\" href=\"" + Paths.escape(href) + "\"><code>" + Paths.escape(member.name) + "</code></a></td><td>" + Paths.escape(Model.summary(member.doc)) + "</td></tr>\n")
+  }
+  emit(held, "</tbody></table></div>\n")
+}
+
+/// A function, method, or constant documented in its own section.
+fn detail(body: Body, unit: &Model.Unit, member: &Model.Member, page: Str, context: &Context) -> Body {
+  var held = emit(body, "<section class=\"api-member\">\n")
+  held = section(held, 3, member.name, member.name)
+  held = declaration(held, unit, member.signature, page, context)
+  held = documentation(held, member.doc, unit, page, member.line, context)
+  let shown = member.parameters.filter(|parameter: Model.Parameter| parameter.name != "self")
+  if !shown.isEmpty() {
+    held = emit(held, "<h4>Parameters</h4>\n<dl class=\"api-parameters\">\n")
+    for parameter in shown {
+      held = emit(held, "<dt><code>" + Paths.escape(parameter.name) + "</code></dt><dd><code>" + Signature.html(unit, parameter.kind, &context.references, page) + "</code></dd>\n")
+    }
+    held = emit(held, "</dl>\n")
+  }
+  if !member.returns.isEmpty() {
+    let label = if member.kind == "constant" { "Type" } else { "Returns" }
+    held = emit(held, "<h4>" + label + "</h4>\n<p><code>" + Signature.html(unit, member.returns, &context.references, page) + "</code></p>\n")
+  }
+  emit(source(held, unit, member.line, context), "</section>\n")
+}
+
+/// The page of a module.
+fn modulePage(unit: &Model.Unit, context: &Context) -> (Docgen.Page, Array[Docgen.Diagnostic]) {
+  let page = Catalog.pageOf(&context.options, unit.uid)
+  var body = heading(start(), "Module", unit.uid)
+  body = source(body, unit, unit.line, context)
+  body = documentation(body, unit.doc, unit, page, unit.line, context)
+  for (id, title, kinds) in SECTIONS {
+    let members = unit.members.filter(|member: Model.Member| kinds.contains(member.kind))
+    if members.isEmpty() { continue }
+    body = summaryTable(section(body, 2, id, title), &members, page, context)
+    if (id == "functions" || id == "constants") && !context.options.separate {
+      for member in members { body = detail(body, unit, &member, page, context) }
+    }
+  }
+  finish(body, page, unit, "api-module", unit.uid, unit.uid, Model.summary(unit.doc))
+}
+
+/// The page of one function or constant.
+fn memberPage(unit: &Model.Unit, member: &Model.Member, context: &Context) -> (Docgen.Page, Array[Docgen.Diagnostic]) {
+  let page = Catalog.pageOf(&context.options, member.uid)
+  var body = heading(start(), kindName(member.kind), member.name)
+  let moduleHref = Paths.between(page, Catalog.pageOf(&context.options, unit.uid))
+  body = emit(body, "<p class=\"api-namespace\">Module <a class=\"xref\" href=\"" + Paths.escape(moduleHref) + "\">" + Paths.escape(unit.uid) + "</a></p>\n")
+  body = detail(body, unit, member, page, context)
+  finish(body, page, unit, "api-member", member.name, member.uid, Model.summary(member.doc))
+}
+
+/// The page of a record, union, alias, opaque type, or trait.
+fn typePage(unit: &Model.Unit, member: &Model.Member, context: &Context) -> (Docgen.Page, Array[Docgen.Diagnostic]) {
+  let page = Catalog.pageOf(&context.options, member.uid)
+  var body = heading(start(), kindName(member.kind), member.name)
+  let moduleHref = Paths.between(page, Catalog.pageOf(&context.options, unit.uid))
+  body = emit(body, "<p class=\"api-namespace\">Module <a class=\"xref\" href=\"" + Paths.escape(moduleHref) + "\">" + Paths.escape(unit.uid) + "</a></p>\n")
+  body = declaration(body, unit, member.signature, page, context)
+  body = source(body, unit, member.line, context)
+  body = documentation(body, member.doc, unit, page, member.line, context)
+  if member.kind == "record" || member.kind == "union" {
+    let (id, title, column) = if member.kind == "record" { ("fields", "Fields", "Type") } else { ("variants", "Variants", "Holds") }
+    body = emit(section(body, 2, id, title), "<div class=\"table-wrapper\"><table class=\"api-table\"><thead><tr><th>Name</th><th>" + column + "</th><th>Description</th></tr></thead><tbody>\n")
+    for inner in member.members {
+      body = emit(body, "<tr id=\"" + Paths.escape(inner.name) + "\"><td><code>" + Paths.escape(inner.name) + "</code></td><td><code>" + Signature.html(unit, inner.returns, &context.references, page) + "</code></td><td>")
+      body = emit(documentation(body, inner.doc, unit, page, inner.line, context), "</td></tr>\n")
+    }
+    body = emit(body, "</tbody></table></div>\n")
+  }
+  if member.kind == "trait" {
+    if !member.members.isEmpty() {
+      body = section(body, 2, "methods", "Methods")
+      for method in member.members { body = detail(body, unit, &method, page, context) }
+    }
+    let implementors = implementorsOf(&member.uid, context)
+    if !implementors.isEmpty() {
+      body = emit(section(body, 2, "implementations", "Implementations"), "<ul class=\"api-list\">\n")
+      for (owner, target) in implementors { body = emit(body, "<li><code>" + Signature.html(&owner, target, &context.references, page) + "</code></li>\n") }
+      body = emit(body, "</ul>\n")
+    }
+  } else {
+    let traits = traitsOf(member, context)
+    if !traits.isEmpty() {
+      body = emit(section(body, 2, "implements", "Implemented traits"), "<ul class=\"api-list\">\n")
+      for contract in traits { body = emit(body, "<li><code>" + Signature.html(unit, contract, &context.references, page) + "</code></li>\n") }
+      body = emit(body, "</ul>\n")
+    }
+  }
+  let related = unit.members.filter(|other: Model.Member| other.kind == "function" && mentions(other.signature, member.name))
+  if !related.isEmpty() { body = summaryTable(section(body, 2, "related", "Related functions"), &related, page, context) }
+  finish(body, page, unit, "api-type", member.name, member.uid, Model.summary(member.doc))
+}
+
+/// Types implementing a trait across all modules, with the module each implementation is in.
+fn implementorsOf(uid: &Str, context: &Context) -> Array[(Model.Unit, Str)] {
+  var result: Array[(Model.Unit, Str)] = []
+  for owner in context.units {
+    for held in owner.implementations {
+      if Signature.resolve(&owner, held.contract, &context.references) == *uid { result = result.push((owner, held.target)) }
+    }
+  }
+  result
+}
+
+/// Traits a type implements in any module.
+fn traitsOf(member: &Model.Member, context: &Context) -> Array[Str] {
+  var result: Array[Str] = []
+  for owner in context.units {
+    for held in owner.implementations {
+      let target = Signature.resolve(&owner, held.target.split("[")[0], &context.references)
+      if target == member.uid && !held.contract.isEmpty() {
+        let contract = Signature.resolve(&owner, held.contract, &context.references)
+        let written = if contract.isEmpty() { held.contract } else { contract }
+        if !result.contains(written) { result = result.push(written) }
+      }
+    }
+  }
+  result
+}
+
+/// Whether a signature names a type as a whole word.
+fn mentions(signature: Str, name: Str) -> Bool {
+  var cleaned = signature
+  for separator in ["(", ")", "[", "]", ",", ":", "&", "->", "|", "\{", "\}", "="] { cleaned = cleaned.replace(separator, " ") }
+  for word in cleaned.split(" ") {
+    let parts = word.split(".")
+    if parts[parts.length() - 1] == name { return true }
+  }
+  false
+}
