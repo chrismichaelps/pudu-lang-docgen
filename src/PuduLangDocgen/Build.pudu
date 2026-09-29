@@ -1,0 +1,272 @@
+/** @Docgen.Build.Module — a complete, validated site plan from loaded project content */
+module PuduLangDocgen.Build
+
+import Std.Json as Json
+import Std.List as List
+import Std.Map as Map
+import PuduLangDocgen.Api.Catalog as Catalog
+import PuduLangDocgen.Api.Model as Model
+import PuduLangDocgen.Api.Pages as ApiPages
+import PuduLangDocgen.Api.Sheet as Sheet
+import PuduLangDocgen.Build.Checks as Checks
+import PuduLangDocgen.Build.Overwrite as Overwrite
+import PuduLangDocgen.Build.Site as Site
+import PuduLangDocgen.Build.Sources as Sources
+import PuduLangDocgen.Configuration as Configuration
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Inline as Inline
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Markdown.Render as Render
+import PuduLangDocgen.Markdown.Syntax as Syntax
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Navigation as Navigation
+import PuduLangDocgen.Navigation.Resolve as Resolve
+import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.References as References
+import PuduLangDocgen.Rest.Pages as RestPages
+import PuduLangDocgen.Theme as Theme
+
+/** @Docgen.Build.Input — everything a build reads, already loaded from the project */
+export type Input = {
+  config: Configuration.Config,
+  paths: Array[Str],
+  files: Map[Str, Str],
+  resources: Array[(Str, Docgen.Resource)],
+  units: Array[Array[Model.Unit]],
+  external: Array[Docgen.Reference],
+  template: Array[(Str, Str)],
+  assets: Array[Docgen.Resource],
+  history: Map[Str, Str],
+  repository: Configuration.Contribution,
+  diagrams: Map[Str, Str],
+  generator: Str,
+  today: Str
+}
+
+/** @Docgen.Build.Extensions — caller transforms applied to pages and to the finished outputs */
+export type Extensions = { pages: Array[fn(Docgen.Page) -> Docgen.Page], artifacts: Array[fn(Array[Docgen.Artifact]) -> Array[Docgen.Artifact]] }
+
+/// Extensions that change nothing.
+export fn extensions() -> Extensions { Extensions{pages: [], artifacts: []} }
+
+/// The site plan, or every error found. Warnings travel with a successful plan; nothing is
+/// planned for output unless the whole site validates.
+export fn plan(input: &Input, extending: &Extensions) -> Result[Docgen.Plan, Array[Docgen.Diagnostic]] {
+  let config = input.config
+  var problems: Array[Docgen.Diagnostic] = []
+  let content = Sources.mapped(&config.content, &input.paths, &[config.output])
+  if content.isEmpty() && config.metadata.isEmpty() { return Err([Docgen.error(Codes.NOTHING_TO_BUILD, "docgen.json", 1, "no content or metadata is configured")]) }
+  let (declared, rules, metadataProblems) = Sources.metadata(&config, &input.files)
+  problems = problems.concat(metadataProblems)
+  let global = Meta.merge(&declared, &templateMeta(&input.template, &input.assets))
+  var kinds: Array[Str] = []
+  for (kind, _style) in config.alerts { kinds = kinds.push(kind) }
+  let read = Sources.read(&content, &input.files, &global, &rules, &kinds)
+  problems = problems.concat(read.diagnostics)
+  var sections: Array[Overwrite.Section] = []
+  for (source, _output) in Sources.mapped(&config.overwrite, &input.paths, &[config.output]) {
+    let (found, overwriteProblems) = Overwrite.parse(source, Map.getOr(&input.files, source, ""))
+    sections = sections.concat(found)
+    problems = problems.concat(overwriteProblems)
+  }
+  var units: Array[(Catalog.Options, Array[Model.Unit])] = []
+  var index = 0
+  for source in config.metadata {
+    let loaded = if index < input.units.length() { input.units[index] } else { [] }
+    units = units.push((source.options, Overwrite.units(&Catalog.select(&loaded, &source.options), &sections)))
+    index = index + 1
+  }
+  var outputs: Array[(Str, Str)] = input.resources.map(fn(entry: (Str, Docgen.Resource)) -> (Str, Str) {
+      let (source, resource) = entry
+      (source, resource.path)
+    })
+  var own: Array[Docgen.Reference] = []
+  for entry in read.entries {
+    outputs = outputs.push((entry.source, entry.output))
+    let uid = Meta.textOr(&entry.meta, "uid", "")
+    if !uid.isEmpty() { own = own.push(Docgen.Reference{uid: uid, name: titleOf(&entry), fullName: titleOf(&entry), href: entry.output, kind: "article"}) }
+  }
+  for (options, selected) in units { own = own.concat(Catalog.references(&selected, &options)) }
+  let settings = rendering(&config, &global, &input.template, &input.diagrams)
+  for entry in read.entries {
+    match entry.document {
+      case Sources.Service(service) => {
+        let located = Phrase.Scope{page: entry.output, source: entry.source, outputs: mapOf([]), references: mapOf([]), settings: settings}
+        let (_page, found, _problems) = RestPages.page(&service, Meta.textOr(&entry.meta, "uid", Paths.slug(service.title)), &located)
+        own = own.concat(found)
+      }
+      case _ => {}
+    }
+  }
+  let (registry, registryProblems) = References.registry(&own, &input.external)
+  problems = problems.concat(registryProblems)
+  let outputMap = mapOf(outputs)
+  var pages: Array[Docgen.Page] = []
+  for entry in read.entries {
+    let (page, found) = render(&entry, &outputMap, &registry, &settings, &sections)
+    pages = pages.push(page)
+    problems = problems.concat(found)
+  }
+  for (options, selected) in units {
+    let context = ApiPages.Context{options: options, references: registry, outputs: outputMap, settings: settings, units: selected}
+    for unit in selected {
+      let (found, apiProblems) = ApiPages.pages(&unit, &context)
+      pages = pages.concat(found.map(|page: Docgen.Page| Docgen.Page{..page, meta: Meta.merge(&Meta.merge(&global, &Meta.forPath(&rules, page.source)), &Overwrite.metaFor(&sections, page.uid))}))
+      problems = problems.concat(apiProblems)
+    }
+  }
+  if pages.filter(|page: Docgen.Page| page.path.toLower() == "404.html").isEmpty() { pages = pages.push(Site.notFound(&global)) }
+  for transform in extending.pages { pages = pages.map(|page: Docgen.Page| transform(page)) }
+  problems = problems.concat(Checks.fragments(&pages))
+  var tocs = read.tocs
+  for (options, selected) in units {
+    let output = if options.dest.isEmpty() { "toc.yml" } else { options.dest + "/toc.yml" }
+    let taken = tocs.filter(fn(entry: (Str, Str, Navigation.Toc)) -> Bool {
+        let (_source, published, _toc) = entry
+        published == output
+      })
+    if taken.isEmpty() {
+      let generated = Navigation.Toc{items: uidItems(&Catalog.toc(&selected, &options)), meta: []}
+      var folders: Array[Str] = [""]
+      for mapping in config.content {
+        if mapping.dest.isEmpty() && !folders.contains(mapping.src) { folders = folders.push(mapping.src) }
+      }
+      var first = true
+      for folder in folders {
+        let key = if folder.isEmpty() { output } else { folder + "/" + output }
+        tocs = tocs.push((key, if first { output } else { "" }, generated))
+        first = false
+      }
+    }
+  }
+  if tocs.isEmpty() {
+    let articles = List.sortBy(&pages.filter(|page: Docgen.Page| page.kind == "article" && !page.source.isEmpty()), |left: Docgen.Page, right: Docgen.Page| left.path < right.path)
+    let items = articles.map(|page: Docgen.Page| Docgen.TocItem{title: page.title, href: page.source, uid: "", expanded: false, children: []})
+    tocs = [("toc.yml", "toc.yml", Navigation.Toc{items: items, meta: []})]
+  }
+  let tocItems = mapOf(tocs.map(fn(entry: (Str, Str, Navigation.Toc)) -> (Str, Array[Docgen.TocItem]) {
+        let (source, _output, toc) = entry
+        (source, toc.items)
+      }))
+  let titles = mapOf(pages.map(|page: Docgen.Page| (page.path, page.title)))
+  let links = Resolve.Links{tocs: tocItems, outputs: outputMap, references: registry, titles: titles}
+  let (books, tocProblems) = Site.books(&tocs, &links)
+  problems = problems.concat(tocProblems)
+  let look = match Theme.load(&input.template) {
+    case Ok(found) => found
+    case Err(found) => { return Err(Checks.ruled(&problems.concat(found), &config.rules, config.warningsAsErrors)) }
+  }
+  let context = Site.Context{config: config, books: books, look: look, history: input.history, repository: input.repository, global: global, generator: input.generator, today: input.today}
+  var artifacts = Theme.assets().concat(Site.rendered(&pages, &context)).concat(Site.files(&pages, &own, &context))
+  let copied = input.resources.map(fn(entry: (Str, Docgen.Resource)) -> Docgen.Resource {
+      let (_source, resource) = entry
+      resource
+    }).concat(input.assets)
+  let allPaths = artifacts.map(|artifact: Docgen.Artifact| artifact.path).concat(copied.map(|resource: Docgen.Resource| resource.path)).push("manifest.json")
+  artifacts = artifacts.push(Docgen.Artifact{path: "manifest.json", content: Site.manifest(&pages, &outputs.filter(fn(entry: (Str, Str)) -> Bool {
+            let (source, _output) = entry
+            input.resources.filter(fn(resource: (Str, Docgen.Resource)) -> Bool {
+                let (from, _held) = resource
+                from == source
+              }).length() > 0
+          }), input.generator, &List.sortBy(&allPaths, |left: Str, right: Str| left < right)) })
+  for transform in extending.artifacts { artifacts = transform(artifacts) }
+  problems = problems.concat(Checks.outputs(&artifacts.map(|artifact: Docgen.Artifact| artifact.path).concat(copied.map(|resource: Docgen.Resource| resource.path))))
+  let final = Checks.ruled(&problems, &config.rules, config.warningsAsErrors)
+  if Docgen.failed(&final) { return Err(final) }
+  let ordered = List.sortBy(&artifacts, |left: Docgen.Artifact, right: Docgen.Artifact| left.path < right.path)
+  Ok(Docgen.Plan{artifacts: ordered, resources: List.sortBy(&copied, |left: Docgen.Resource, right: Docgen.Resource| left.path < right.path), diagnostics: final})
+}
+
+/// Rendering choices from configuration, metadata, and template tokens.
+fn rendering(config: &Configuration.Config, global: &Array[(Str, Docgen.Meta)], template: &Array[(Str, Str)], diagrams: &Map[Str, Str]) -> Phrase.Rendering {
+  var titles: Array[(Str, Str)] = []
+  for (path, text) in *template {
+    if path == "token.json" {
+      match Json.decode(text) {
+        case Ok(found) => match Meta.fromJson(&found) {
+          case Docgen.Fields(fields) => {
+            for (key, value) in fields {
+              match value {
+                case Docgen.Text(written) => { titles = titles.push((key.toLower(), written)) }
+                case _ => {}
+              }
+            }
+          }
+          case _ => {}
+        }
+        case Err(_) => {}
+      }
+    }
+  }
+  let classes = config.alerts.filter(fn(entry: (Str, Str)) -> Bool {
+      let (_kind, style) = entry
+      !style.isEmpty()
+    })
+  let newTab = Meta.flag(global, "_enableNewTab") && !Meta.flag(global, "_disableNewTab")
+  Phrase.Rendering{newTab: newTab, plantUml: config.diagrams.remote + "/" + config.diagrams.format, diagrams: *diagrams, alertClasses: mapOf(classes), alertTitles: mapOf(titles)}
+}
+
+/// Metadata a template folder contributes: its `public/main.css` and `public/main.js`.
+fn templateMeta(template: &Array[(Str, Str)], assets: &Array[Docgen.Resource]) -> Array[(Str, Docgen.Meta)] {
+  var result: Array[(Str, Docgen.Meta)] = []
+  let paths = assets.map(|resource: Docgen.Resource| resource.path).concat(template.map(fn(entry: (Str, Str)) -> Str {
+        let (path, _text) = entry
+        path
+      }))
+  if paths.contains("public/main.css") { result = result.push(("_appStyle", Docgen.Text("public/main.css"))) }
+  if paths.contains("public/main.js") { result = result.push(("_appScript", Docgen.Text("public/main.js"))) }
+  result
+}
+
+/// The title of a content entry: its metadata title, else its first level-one heading, else
+/// its file name.
+fn titleOf(entry: &Sources.Entry) -> Str {
+  let named = Meta.textOr(&entry.meta, "title", "")
+  if !named.isEmpty() { return named }
+  match entry.document {
+    case Sources.Article(article) => {
+      for block in article.blocks {
+        match block {
+          case Syntax.Heading(title) => { if title.level == 1 { return Inline.plain(&title.content).trim() } }
+          case _ => {}
+        }
+      }
+    }
+    case Sources.Service(service) => { return service.title }
+    case Sources.ApiPage(Docgen.Fields(fields)) => { return Meta.textOr(&fields, "title", entry.source) }
+    case _ => {}
+  }
+  let parts = entry.source.split("/")
+  Paths.output(parts[parts.length() - 1]).replace(".html", "")
+}
+
+/// One content entry rendered as a page.
+fn render(entry: &Sources.Entry, outputs: &Map[Str, Str], registry: &Map[Str, Docgen.Reference], settings: &Phrase.Rendering, sections: &Array[Overwrite.Section]) -> (Docgen.Page, Array[Docgen.Diagnostic]) {
+  let located = Phrase.Scope{page: entry.output, source: entry.source, outputs: *outputs, references: *registry, settings: *settings}
+  let uid = Meta.textOr(&entry.meta, "uid", "")
+  let meta = Meta.merge(&entry.meta, &Overwrite.metaFor(sections, uid))
+  let base = Docgen.Page{path: entry.output, source: entry.source, kind: "article", title: titleOf(entry), uid: uid, summary: Meta.textOr(&meta, "description", ""), body: "", headings: [], links: [], meta: meta}
+  match entry.document {
+    case Sources.Article(article) => {
+      let rendered = Render.render(&article.blocks, &located)
+      let heading = if rendered.title.isEmpty() && !Meta.textOr(&meta, "title", "").isEmpty() { "<h1 id=\"" + Paths.escape(Paths.slug(base.title)) + "\">" + Paths.escape(base.title) + "</h1>\n" } else { "" }
+      (Docgen.Page{..base, summary: if base.summary.isEmpty() { rendered.summary } else { base.summary }, body: heading + rendered.html, headings: rendered.headings, links: rendered.links}, rendered.diagnostics)
+    }
+    case Sources.Moved(_target) => (Docgen.Page{..base, kind: "redirect"}, [])
+    case Sources.Service(service) => {
+      let (page, _references, found) = RestPages.page(&service, if uid.isEmpty() { Paths.slug(service.title) } else { uid }, &located)
+      (Docgen.Page{..page, meta: meta}, found)
+    }
+    case Sources.ApiPage(value) => match Sheet.render(&value, &located) {
+      case Ok(found) => (Docgen.Page{..base, kind: "api-page", title: found.title, body: found.body, headings: found.headings, links: found.links}, found.diagnostics)
+      case Err(reason) => (base, [Docgen.error(Codes.CONTENT_INVALID, entry.source, 1, reason)])
+    }
+  }
+}
+
+/// Generated API navigation bound by identity rather than by path.
+fn uidItems(items: &Array[Docgen.TocItem]) -> Array[Docgen.TocItem] {
+  items.map(|item: Docgen.TocItem| Docgen.TocItem{..item, href: if item.uid.isEmpty() { item.href } else { "" }, children: uidItems(&item.children)})
+}

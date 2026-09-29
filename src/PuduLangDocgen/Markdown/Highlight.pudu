@@ -1,0 +1,160 @@
+/** @Docgen.Markdown.Highlight — static syntax coloring for code samples */
+module PuduLangDocgen.Markdown.Highlight
+
+import Std.Char as Char
+import Std.Map as Map
+import Std.Set as Set
+import PuduLangDocgen.Markdown.Languages as Languages
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Markdown.Profile — lexical conventions of one language */
+type Profile = { keywords: Set[Str], literals: Set[Str], comments: Array[Str], block: (Str, Str), quotes: Str, types: Bool }
+
+/// Keywords shared by languages with C-like syntax.
+const C_FAMILY: Array[Str] = [
+  "if", "else", "for", "while", "do", "switch", "case", "default", "break", "continue", "return", "goto",
+  "struct", "enum", "union", "typedef", "static", "const", "extern", "void", "int", "char", "long",
+  "short", "float", "double", "unsigned", "signed", "sizeof", "volatile", "inline"
+]
+
+/// Lexical profiles by language name and common alias.
+const PROFILES: Map[Str, Profile] = mapOf([
+    ("pudu", Profile{keywords: setOf(["module", "import", "export", "as", "let", "var", "const", "mut", "fn", "async", "return", "if", "else", "match", "case", "for", "in", "while", "loop", "break", "continue", "type", "enum", "struct", "trait", "impl", "where", "await", "task", "spawn", "comptime", "macro", "unsafe", "with", "scope", "dynamic"]), literals: setOf(["true", "false", "Some", "None", "Ok", "Err"]), comments: ["//"], block: ("/*", "*/"), quotes: "\"'", types: true}),
+    ("rust", Profile{keywords: setOf(["as", "async", "await", "break", "const", "continue", "crate", "dyn", "else", "enum", "extern", "fn", "for", "if", "impl", "in", "let", "loop", "match", "mod", "move", "mut", "pub", "ref", "return", "self", "Self", "static", "struct", "super", "trait", "type", "unsafe", "use", "where", "while"]), literals: setOf(["true", "false", "Some", "None", "Ok", "Err"]), comments: ["//"], block: ("/*", "*/"), quotes: "\"", types: true}),
+    ("go", Profile{keywords: setOf(["break", "case", "chan", "const", "continue", "default", "defer", "else", "fallthrough", "for", "func", "go", "goto", "if", "import", "interface", "map", "package", "range", "return", "select", "struct", "switch", "type", "var"]), literals: setOf(["true", "false", "nil", "iota"]), comments: ["//"], block: ("/*", "*/"), quotes: "\"'`", types: false}),
+    ("javascript", Profile{keywords: setOf(["async", "await", "break", "case", "catch", "class", "const", "continue", "debugger", "default", "delete", "do", "else", "export", "extends", "finally", "for", "from", "function", "if", "import", "in", "instanceof", "let", "new", "of", "return", "static", "super", "switch", "this", "throw", "try", "typeof", "var", "void", "while", "yield"]), literals: setOf(["true", "false", "null", "undefined", "NaN", "Infinity"]), comments: ["//"], block: ("/*", "*/"), quotes: "\"'`", types: false}),
+    ("typescript", Profile{keywords: setOf(["abstract", "as", "async", "await", "break", "case", "catch", "class", "const", "continue", "declare", "default", "do", "else", "enum", "export", "extends", "finally", "for", "from", "function", "if", "implements", "import", "in", "instanceof", "interface", "keyof", "let", "namespace", "new", "of", "private", "protected", "public", "readonly", "return", "static", "super", "switch", "this", "throw", "try", "type", "typeof", "var", "void", "while", "yield"]), literals: setOf(["true", "false", "null", "undefined"]), comments: ["//"], block: ("/*", "*/"), quotes: "\"'`", types: true}),
+    ("python", Profile{keywords: setOf(["and", "as", "assert", "async", "await", "break", "class", "continue", "def", "del", "elif", "else", "except", "finally", "for", "from", "global", "if", "import", "in", "is", "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try", "while", "with", "yield"]), literals: setOf(["True", "False", "None"]), comments: ["#"], block: ("", ""), quotes: "\"'", types: false}),
+    ("ruby", Profile{keywords: setOf(["begin", "class", "def", "do", "else", "elsif", "end", "ensure", "if", "module", "next", "rescue", "return", "self", "then", "unless", "until", "when", "while", "yield", "require"]), literals: setOf(["true", "false", "nil"]), comments: ["#"], block: ("", ""), quotes: "\"'", types: true}),
+    ("java", Profile{keywords: setOf(["abstract", "boolean", "break", "byte", "case", "catch", "char", "class", "continue", "default", "do", "double", "else", "enum", "extends", "final", "finally", "float", "for", "if", "implements", "import", "instanceof", "int", "interface", "long", "new", "package", "private", "protected", "public", "return", "short", "static", "super", "switch", "this", "throw", "throws", "try", "var", "void", "while"]), literals: setOf(["true", "false", "null"]), comments: ["//"], block: ("/*", "*/"), quotes: "\"'", types: true}),
+    ("kotlin", Profile{keywords: setOf(["as", "break", "class", "continue", "do", "else", "for", "fun", "if", "in", "interface", "is", "object", "package", "return", "super", "this", "throw", "try", "typealias", "val", "var", "when", "while", "import", "data", "sealed", "override", "private", "public"]), literals: setOf(["true", "false", "null"]), comments: ["//"], block: ("/*", "*/"), quotes: "\"'", types: true}),
+    ("swift", Profile{keywords: setOf(["class", "deinit", "enum", "extension", "func", "import", "init", "let", "protocol", "struct", "subscript", "typealias", "var", "break", "case", "continue", "default", "defer", "do", "else", "for", "guard", "if", "in", "repeat", "return", "switch", "where", "while", "throws", "try", "self"]), literals: setOf(["true", "false", "nil"]), comments: ["//"], block: ("/*", "*/"), quotes: "\"", types: true}),
+    ("c", Profile{keywords: setOf(C_FAMILY), literals: setOf(["NULL", "true", "false"]), comments: ["//", "#"], block: ("/*", "*/"), quotes: "\"'", types: false}),
+    ("c++", Profile{keywords: setOf(C_FAMILY.concat(["class", "namespace", "template", "typename", "public", "private", "protected", "virtual", "override", "new", "delete", "using", "auto", "constexpr", "this", "throw", "try", "catch", "bool"])), literals: setOf(["nullptr", "true", "false"]), comments: ["//", "#"], block: ("/*", "*/"), quotes: "\"'", types: false}),
+    ("json", Profile{keywords: setOf([]), literals: setOf(["true", "false", "null"]), comments: [], block: ("", ""), quotes: "\"", types: false}),
+    ("yaml", Profile{keywords: setOf([]), literals: setOf(["true", "false", "null", "yes", "no", "on", "off"]), comments: ["#"], block: ("", ""), quotes: "\"'", types: false}),
+    ("toml", Profile{keywords: setOf([]), literals: setOf(["true", "false"]), comments: ["#"], block: ("", ""), quotes: "\"'", types: false}),
+    ("shell", Profile{keywords: setOf(["if", "then", "else", "elif", "fi", "for", "in", "do", "done", "while", "until", "case", "esac", "function", "return", "local", "export", "echo", "set", "unset", "cd", "exit"]), literals: setOf(["true", "false"]), comments: ["#"], block: ("", ""), quotes: "\"'", types: false}),
+    ("powershell", Profile{keywords: setOf(["begin", "break", "catch", "class", "continue", "do", "else", "elseif", "end", "exit", "filter", "finally", "for", "foreach", "function", "if", "in", "param", "process", "return", "switch", "throw", "trap", "try", "until", "while"]), literals: setOf(["$true", "$false", "$null"]), comments: ["#"], block: ("<#", "#>"), quotes: "\"'", types: false}),
+    ("sql", Profile{keywords: setOf(["select", "from", "where", "insert", "into", "values", "update", "set", "delete", "create", "table", "drop", "alter", "join", "left", "right", "inner", "outer", "on", "group", "by", "order", "having", "limit", "and", "or", "not", "as", "distinct", "union", "SELECT", "FROM", "WHERE", "INSERT", "INTO", "VALUES", "UPDATE", "SET", "DELETE", "CREATE", "TABLE", "JOIN", "ON", "GROUP", "BY", "ORDER", "AND", "OR", "NOT", "AS"]), literals: setOf(["null", "NULL", "true", "false", "TRUE", "FALSE"]), comments: ["--"], block: ("/*", "*/"), quotes: "'\"", types: false}),
+    ("css", Profile{keywords: setOf(["@media", "@import", "@font-face", "@keyframes", "!important"]), literals: setOf([]), comments: [], block: ("/*", "*/"), quotes: "\"'", types: false}),
+    ("html", Profile{keywords: setOf([]), literals: setOf([]), comments: [], block: ("<!--", "-->"), quotes: "\"'", types: false})
+  ])
+
+/// Language identities that share another language's profile.
+const SHARED: Map[Str, Str] = mapOf([
+    ("tsx", "typescript"), ("xml", "html"), ("svg", "html"), ("vue", "html"), ("scss", "css"), ("less", "css"),
+    ("json-with-comments", "json"), ("json5", "json"), ("objective-c", "c"), ("objective-c++", "c++"),
+    ("groovy", "java"), ("scala", "java"), ("dart", "java")
+  ])
+
+/// Escaped HTML of each line, with tokens of known languages wrapped in `hl-*` spans.
+/// Unknown languages are escaped without coloring.
+export fn lines(language: Str, text: Str) -> Array[Str] {
+  let name = profileName(language)
+  let tokens = match Map.get(&PROFILES, name) {
+    case Some(profile) => tokenize(&profile, text)
+    case None => [("", text)]
+  }
+  var result: Array[Str] = []
+  var current: Array[Str] = []
+  for (kind, written) in tokens {
+    let parts = written.split("\n")
+    var index = 0
+    for part in parts {
+      if index > 0 {
+        result = result.push(current.join(""))
+        current = []
+      }
+      if !part.isEmpty() {
+        current = current.push(if kind.isEmpty() { Paths.escape(part) } else { "<span class=\"hl-" + kind + "\">" + Paths.escape(part) + "</span>" })
+      }
+      index = index + 1
+    }
+  }
+  result.push(current.join(""))
+}
+
+/// The profile a language name or alias selects, or the empty text.
+fn profileName(language: Str) -> Str {
+  let identity = Languages.identify(language)
+  let name = Map.getOr(&SHARED, identity, identity)
+  if Map.containsKey(&PROFILES, name) { name } else { "" }
+}
+
+/// Whether text continues with a given prefix at an index.
+fn startsAt(cs: &Array[Char], index: Int, prefix: Str) -> Bool {
+  if prefix.isEmpty() { return false }
+  let wanted = prefix.chars()
+  if index + wanted.length() > cs.length() { return false }
+  for offset in 0..wanted.length() {
+    if cs[index + offset] != wanted[offset] { return false }
+  }
+  true
+}
+
+/// Text of the characters in a half-open range.
+fn slice(cs: &Array[Char], from: Int, to: Int) -> Str {
+  var pieces: Array[Str] = []
+  for index in from..to { pieces = pieces.push(cs[index].toText()) }
+  pieces.join("")
+}
+
+/// Classified pieces: `c` comment, `s` string, `n` number, `k` keyword, `l` literal, `t` type.
+fn tokenize(profile: &Profile, text: Str) -> Array[(Str, Str)] {
+  let cs = text.chars()
+  var tokens: Array[(Str, Str)] = []
+  var plain: Array[Str] = []
+  var index = 0
+  let (open, close) = profile.block
+  while index < cs.length() {
+    let character = cs[index]
+    var end = index
+    var kind = ""
+    if startsAt(&cs, index, open) {
+      end = index + open.length()
+      while end < cs.length() && !startsAt(&cs, end, close) { end = end + 1 }
+      end = if end < cs.length() { end + close.length() } else { end }
+      kind = "c"
+    } else if profile.comments.filter(|leader: Str| startsAt(&cs, index, leader)).length() > 0 && (character != '#' || index == 0 || Char.isWhitespace(cs[index - 1])) {
+      end = index
+      while end < cs.length() && cs[end] != '\n' { end = end + 1 }
+      kind = "c"
+    } else if profile.quotes.contains(character.toText()) {
+      end = index + 1
+      while end < cs.length() && cs[end] != character && (cs[end] != '\n' || character == '`') {
+        if cs[end] == '\\' { end = end + 1 }
+        end = end + 1
+      }
+      end = if end < cs.length() && cs[end] == character { end + 1 } else { end }
+      kind = "s"
+    } else if Char.isDigit(character) && (index == 0 || !identifier(cs[index - 1])) {
+      end = index
+      while end < cs.length() && (Char.isAlphanumeric(cs[end]) || cs[end] == '.' || cs[end] == '_') { end = end + 1 }
+      kind = "n"
+    } else if identifier(character) || character == '$' || character == '@' {
+      end = index + 1
+      while end < cs.length() && (identifier(cs[end]) || cs[end] == '-' && profile.keywords.isEmpty()) { end = end + 1 }
+      let written = slice(&cs, index, end)
+      kind = if Set.contains(&profile.keywords, written) { "k" }
+        else if Set.contains(&profile.literals, written) { "l" }
+        else if profile.types && Char.isUpper(character) { "t" }
+        else { "" }
+    } else { end = index + 1 }
+    if end <= index { end = index + 1 }
+    if kind.isEmpty() {
+      plain = plain.push(slice(&cs, index, end))
+    } else {
+      if !plain.isEmpty() {
+        tokens = tokens.push(("", plain.join("")))
+        plain = []
+      }
+      tokens = tokens.push((kind, slice(&cs, index, end)))
+    }
+    index = end
+  }
+  if plain.isEmpty() { tokens } else { tokens.push(("", plain.join(""))) }
+}
+
+/// Whether a character may appear in an identifier.
+fn identifier(character: Char) -> Bool { Char.isAlphanumeric(character) || character == '_' }

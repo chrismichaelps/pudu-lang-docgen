@@ -1,0 +1,160 @@
+/** @Docgen.Template.Module — logic-less page templates filled from metadata */
+module PuduLangDocgen.Template
+
+import Std.Map as Map
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Template.Node — one piece of a parsed template */
+export type Node = Literal(Str) | Value(Str, Bool) | Section(Str, Bool, Array[Node]) | Partial(Str)
+
+/// Deepest partial inclusion followed before rendering stops expanding partials.
+const MAX_PARTIALS: Int = 16
+
+/// A template parsed into nodes; an unclosed or mismatched section is an error.
+/// `\{\{name\}\}` escapes, `\{\{\{name\}\}\}` and `\{\{& name\}\}` do not, `\{\{#name\}\}…\{\{/name\}\}`
+/// repeats or shows, `\{\{^name\}\}` shows when empty, `\{\{>name\}\}` includes, `\{\{! …\}\}` is ignored.
+export fn parse(text: Str) -> Result[Array[Node], Str] {
+  let (nodes, _rest, _closed) = sequence(text, "") ?
+  Ok(nodes)
+}
+
+/// A template rendered against metadata; `partials` are parsed templates by name.
+export fn render(nodes: &Array[Node], context: &Docgen.Meta, partials: &Map[Str, Array[Node]]) -> Str {
+  fill(nodes, &[*context], partials, 0)
+}
+
+/// Nodes up to a closing tag for `open`, with the remaining text and the name closed.
+fn sequence(text: Str, open: Str) -> Result[(Array[Node], Str, Str), Str] {
+  var nodes: Array[Node] = []
+  var rest = text
+  while !rest.isEmpty() {
+    let at = rest.indexOf("\{\{")
+    if at < 0 {
+      nodes = nodes.push(Literal(rest))
+      rest = ""
+      break
+    }
+    if at > 0 { nodes = nodes.push(Literal(rest.take(at))) }
+    let triple = rest.drop(at).startsWith("\{\{\{")
+    let closer = if triple { "\}\}\}" } else { "\}\}" }
+    let start = at + (if triple { 3 } else { 2 })
+    let end = rest.drop(start).indexOf(closer)
+    if end < 0 { return Err("tag is not closed") }
+    let tag = rest.drop(start).take(end).trim()
+    rest = rest.drop(start + end + closer.length())
+    if triple { nodes = nodes.push(Value(tag, false)) }
+      else if tag.startsWith("!") {}
+      else if tag.startsWith("&") { nodes = nodes.push(Value(tag.drop(1).trim(), false)) }
+      else if tag.startsWith(">") { nodes = nodes.push(Partial(tag.drop(1).trim())) }
+      else if tag.startsWith("#") || tag.startsWith("^") {
+      let name = tag.drop(1).trim()
+      let (children, after, closed) = sequence(rest, name) ?
+      if closed != name { return Err("section " + name + " is not closed") }
+      nodes = nodes.push(Section(name, tag.startsWith("^"), children))
+      rest = after
+    } else if tag.startsWith("/") {
+      let name = tag.drop(1).trim()
+      if open.isEmpty() { return Err("section " + name + " is closed without being opened") }
+      if name != open { return Err("section " + open + " is closed by " + name) }
+      return Ok((nodes, rest, name))
+    } else { nodes = nodes.push(Value(tag, true)) }
+  }
+  if !open.isEmpty() { return Err("section " + open + " is not closed") }
+  Ok((nodes, "", ""))
+}
+
+/// Nodes rendered against a stack of contexts, innermost last.
+fn fill(nodes: &Array[Node], stack: &Array[Docgen.Meta], partials: &Map[Str, Array[Node]], depth: Int) -> Str {
+  var pieces: Array[Str] = []
+  for node in *nodes {
+    match node {
+      case Literal(text) => { pieces = pieces.push(text) }
+      case Value(name, escaped) => {
+        let text = scalar(&lookup(stack, name))
+        pieces = pieces.push(if escaped { Paths.escape(text) } else { text })
+      }
+      case Section(name, inverted, children) => {
+        let value = lookup(stack, name)
+        if inverted {
+          if !truthy(&value) { pieces = pieces.push(fill(&children, stack, partials, depth)) }
+        } else {
+          match value {
+            case Docgen.Items(listed) => {
+              for item in listed { pieces = pieces.push(fill(&children, &stack.push(item), partials, depth)) }
+            }
+            case Docgen.Fields(_fields) => { pieces = pieces.push(fill(&children, &stack.push(value), partials, depth)) }
+            case other => { if truthy(&other) { pieces = pieces.push(fill(&children, stack, partials, depth)) } }
+          }
+        }
+      }
+      case Partial(name) => {
+        if depth < MAX_PARTIALS {
+          match Map.get(partials, name) {
+            case Some(found) => { pieces = pieces.push(fill(&found, stack, partials, depth + 1)) }
+            case None => {}
+          }
+        }
+      }
+    }
+  }
+  pieces.join("")
+}
+
+/// A dotted name looked up from the innermost context outwards; `.` is the innermost value.
+fn lookup(stack: &Array[Docgen.Meta], name: Str) -> Docgen.Meta {
+  if name == "." { return if stack.isEmpty() { Docgen.Nothing } else { stack[stack.length() - 1] } }
+  let parts = name.split(".")
+  var index = stack.length() - 1
+  while index >= 0 {
+    match stack[index] {
+      case Docgen.Fields(fields) => {
+        match Meta.get(&fields, parts[0]) {
+          case Some(found) => { return descend(found, &parts.slice(1, parts.length())) }
+          case None => {}
+        }
+      }
+      case _ => {}
+    }
+    index = index - 1
+  }
+  Docgen.Nothing
+}
+
+/// The value reached by following further name parts.
+fn descend(value: Docgen.Meta, parts: &Array[Str]) -> Docgen.Meta {
+  var current = value
+  for part in *parts {
+    current = match current {
+      case Docgen.Fields(fields) => match Meta.get(&fields, part) {
+        case Some(found) => found
+        case None => Docgen.Nothing
+      }
+      case _ => Docgen.Nothing
+    }
+  }
+  current
+}
+
+/// Whether a value shows a section: nonempty text and lists, true, nonzero numbers, and objects.
+fn truthy(value: &Docgen.Meta) -> Bool {
+  match value {
+    case Docgen.Nothing => false
+    case Docgen.Flag(held) => held
+    case Docgen.Text(written) => !written.isEmpty()
+    case Docgen.Whole(count) => count != 0
+    case Docgen.Items(listed) => !listed.isEmpty()
+    case Docgen.Fields(_fields) => true
+  }
+}
+
+/// The text a value shows; lists and objects show nothing.
+fn scalar(value: &Docgen.Meta) -> Str {
+  match value {
+    case Docgen.Text(written) => written
+    case Docgen.Whole(count) => show(count)
+    case Docgen.Flag(held) => if held { "true" } else { "false" }
+    case _ => ""
+  }
+}

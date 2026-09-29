@@ -1,0 +1,194 @@
+/** @Docgen.Command.Seam — the command line: build, metadata, serve, help, and version */
+module PuduLangDocgen.Command
+
+import Std.Io as Io
+import Std.Path as Path
+import PuduLangDocgen.Build as Build
+import PuduLangDocgen.Constants.Package as Package
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Docset as Docset
+import PuduLangDocgen.Serve as Serve
+
+/** @Docgen.Command.Parsed — a command, its positional arguments, and its options */
+export type Parsed = { command: Str, positional: Array[Str], flags: Array[Str], values: Array[(Str, Str)] }
+
+/// Options that take a value.
+const VALUED: Array[Str] = ["--output", "-o", "--metadata", "-m", "--xref", "-x", "--template", "-t", "--port", "-p", "--hostname", "-n"]
+
+/// Options that stand alone.
+const FLAGS: Array[Str] = ["--force", "--dryRun", "--warningsAsErrors", "--disableGitFeatures", "--exportRawModel", "--exportViewModel", "--serve", "-s", "--help", "-h"]
+
+/// Commands and what they do, for help text.
+const COMMANDS: Array[(Str, Str)] = [
+  ("[config]", "Extract API metadata and build the site (the default)"),
+  ("build [config]", "Build the site from docgen.json"),
+  ("metadata [config]", "Write API metadata files for the configured sources"),
+  ("serve [folder]", "Preview a built site over HTTP"),
+  ("version", "Print the package version"),
+  ("help", "Print this help")
+]
+
+/// Default port of the preview server.
+const PORT: Int = 8080
+
+/// Runs a command line and answers its exit status: 0 success, 1 failed work, 2 invalid usage.
+export fn run(arguments: &Array[Str]) -> Int {
+  let parsed = match parse(arguments) {
+    case Ok(found) => found
+    case Err(reason) => {
+      let _said = Io.writeErrorLine(reason + "\n\n" + usage())
+      return 2
+    }
+  }
+  if parsed.flags.contains("--help") || parsed.flags.contains("-h") || parsed.command == "help" {
+    let _said = Io.writeLine(usage())
+    return 0
+  }
+  if parsed.command == "version" {
+    let _said = Io.writeLine(Package.NAME + " " + Package.VERSION)
+    return 0
+  }
+  if parsed.command == "serve" { return serve(if parsed.positional.isEmpty() { "_site" } else { parsed.positional[0] }, &parsed) }
+  let config = if parsed.positional.isEmpty() { Package.CONFIG_FILE } else { configPath(parsed.positional[0]) }
+  let chosen = match options(&parsed) {
+    case Ok(found) => found
+    case Err(reason) => {
+      let _said = Io.writeErrorLine(reason)
+      return 2
+    }
+  }
+  if parsed.command == "metadata" || parsed.command == "" {
+    match Docset.metadata(config, &Docset.Options{..chosen, output: if parsed.command == "metadata" { chosen.output } else { "" }}) {
+      case Ok(written) => { for path in written { let _said = Io.writeLine("wrote " + path) } }
+      case Err(problems) => { return failed(&problems) }
+    }
+    if parsed.command == "metadata" { return 0 }
+  }
+  match Docset.build(config, &chosen, &Build.extensions()) {
+    case Ok(report) => {
+      for problem in report.diagnostics { let _said = Io.writeErrorLine(Docgen.describe(&problem)) }
+      let _said = Io.writeLine("Build succeeded: " + show(report.written.length()) + " written, " + show(report.unchanged.length()) + " unchanged, " + show(report.removed.length()) + " removed.")
+      if parsed.flags.contains("--serve") || parsed.flags.contains("-s") {
+        let folder = Path.join(Path.directoryOf(config), if chosen.output.isEmpty() { "_site" } else { chosen.output })
+        return serve(folder, &parsed)
+      }
+      0
+    }
+    case Err(problems) => failed(&problems)
+  }
+}
+
+/// Command-line arguments read into a command, positional arguments, and options.
+export fn parse(arguments: &Array[Str]) -> Result[Parsed, Str] {
+  var parsed = Parsed{command: "", positional: [], flags: [], values: []}
+  var index = 0
+  if !arguments.isEmpty() && ["build", "metadata", "serve", "version", "help"].contains(arguments[0]) {
+    parsed = Parsed{..parsed, command: arguments[0]}
+    index = 1
+  }
+  while index < arguments.length() {
+    let argument = arguments[index]
+    if VALUED.contains(argument) {
+      if index + 1 >= arguments.length() { return Err("option " + argument + " needs a value") }
+      parsed = Parsed{..parsed, values: parsed.values.push((canonical(argument), arguments[index + 1]))}
+      index = index + 2
+    } else if FLAGS.contains(argument) {
+      parsed = Parsed{..parsed, flags: parsed.flags.push(argument)}
+      index = index + 1
+    } else if argument.startsWith("-") {
+      return Err("unknown option " + argument)
+    } else {
+      parsed = Parsed{..parsed, positional: parsed.positional.push(argument)}
+      index = index + 1
+    }
+  }
+  if parsed.positional.length() > 1 { return Err("expected at most one path, found " + parsed.positional.join(" ")) }
+  Ok(parsed)
+}
+
+/// Help text listing commands and options.
+export fn usage() -> Str {
+  var lines = ["Usage: docgen [command] [path] [options]", "", "Commands:"]
+  for (name, description) in COMMANDS { lines = lines.push("  " + name + "  " + description) }
+  lines.concat([
+      "", "Options:",
+      "  -o, --output <folder>        Output folder instead of the configured one",
+      "  -m, --metadata <key=value>   Global metadata; text, or true/false",
+      "  -x, --xref <map>             Another cross-reference map address or path",
+      "  -t, --template <folder>      Another template folder",
+      "  --force                      Rewrite every output file",
+      "  --dryRun                     Validate and plan without writing",
+      "  --warningsAsErrors           Fail the build on any warning",
+      "  --disableGitFeatures         Skip dates and edit links from git",
+      "  --exportRawModel             Write each page's data model beside it",
+      "  --exportViewModel            Write each page's view model beside it",
+      "  -s, --serve                  Preview the site after building",
+      "  -n, --hostname <host>        Preview host (localhost)",
+      "  -p, --port <number>          Preview port (8080)",
+      "  -h, --help                   Print this help"
+    ]).join("\n")
+}
+
+/// Docset options from parsed arguments.
+fn options(parsed: &Parsed) -> Result[Docset.Options, Str] {
+  var chosen = Docset.options()
+  for (name, value) in parsed.values {
+    if name == "--output" { chosen = Docset.Options{..chosen, output: value} }
+    if name == "--xref" { chosen = Docset.Options{..chosen, xref: chosen.xref.push(value)} }
+    if name == "--template" { chosen = Docset.Options{..chosen, templates: chosen.templates.push(value)} }
+    if name == "--metadata" {
+      let at = value.indexOf("=")
+      if at < 1 { return Err("metadata must be written key=value: " + value) }
+      let written = value.drop(at + 1)
+      let held = if written == "true" { Docgen.Flag(true) } else if written == "false" { Docgen.Flag(false) } else { Docgen.Text(written) }
+      chosen = Docset.Options{..chosen, metadata: chosen.metadata.push((value.take(at), held))}
+    }
+  }
+  Ok(Docset.Options{..chosen,
+      force: parsed.flags.contains("--force"), dryRun: parsed.flags.contains("--dryRun"), warningsAsErrors: parsed.flags.contains("--warningsAsErrors"),
+      disableGitFeatures: parsed.flags.contains("--disableGitFeatures"), exportRawModel: parsed.flags.contains("--exportRawModel"),
+      exportViewModel: parsed.flags.contains("--exportViewModel") })
+}
+
+/// The long name of an option.
+fn canonical(name: Str) -> Str {
+  if name == "-o" { "--output" } else if name == "-m" { "--metadata" } else if name == "-x" { "--xref" } else if name == "-t" { "--template" } else if name == "-p" { "--port" } else if name == "-n" { "--hostname" } else { name }
+}
+
+/// A configuration path; a folder names its `docgen.json`.
+fn configPath(written: Str) -> Str {
+  if written.endsWith(".json") || written.endsWith(".yml") || written.endsWith(".yaml") { written } else { Path.join(written, Package.CONFIG_FILE) }
+}
+
+/// Serves a folder with the host and port options, answering an exit status.
+fn serve(folder: Str, parsed: &Parsed) -> Int {
+  var host = "localhost"
+  var port = PORT
+  for (name, value) in parsed.values {
+    if name == "--hostname" { host = value }
+    if name == "--port" {
+      match value.toInt() {
+        case Some(found) => { port = found }
+        case None => {
+          let _said = Io.writeErrorLine("port must be a number: " + value)
+          return 2
+        }
+      }
+    }
+  }
+  match Serve.serve(folder, host, port) {
+    case Ok(_) => 0
+    case Err(reason) => {
+      let _said = Io.writeErrorLine("cannot serve " + folder + ": " + reason)
+      1
+    }
+  }
+}
+
+/// Reports failures and answers the failed-work status.
+fn failed(problems: &Array[Docgen.Diagnostic]) -> Int {
+  for problem in *problems { let _said = Io.writeErrorLine(Docgen.describe(&problem)) }
+  let errors = problems.filter(|problem: Docgen.Diagnostic| problem.severity == Docgen.Error).length()
+  let _summary = Io.writeErrorLine("Build failed with " + show(errors) + " error(s).")
+  1
+}

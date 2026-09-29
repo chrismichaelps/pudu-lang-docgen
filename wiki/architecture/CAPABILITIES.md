@@ -1,29 +1,43 @@
 # Capability ledger
 
-Status: design/research. Each row requires implementation, failure and regression checks,
-output evidence, and independent review before release. No row is implicitly complete.
+Each row needs implementation, success, failure, and regression checks, output evidence, and
+review before release. "Done" means the module and its suite exist and pass; "Open" rows are
+still to build. The acceptance boundary lists every behavior a row must cover.
 
-| Capability | Acceptance boundary | State |
-| --- | --- | --- |
-| Configuration | typed options, defaults, unknown/malformed refusal, files/globs/excludes, locale/base URL | Pending |
-| Articles | headings, inline formatting, lists, tables, quotes, fences, escaping and source diagnostics | Pending |
-| Authoring | front matter, includes, code snippets, tabs, alerts, images and equations | Pending |
-| Metadata | compiler declaration catalog, filtering, types/members/signatures/docs, source provenance | Pending |
-| HTTP API | operation/schema reference models, validation and reference resolution | Pending |
-| Navigation | nested TOC, breadcrumbs, local/page navigation, landing pages | Pending |
-| References | UID catalogs, external maps, relative links/fragments and duplicate/broken detection | Pending |
-| Templates | original enterprise shell, extension hooks, accessibility, responsive/dark/print modes | Pending |
-| Search | deterministic index, browser filtering, Unicode and safe DOM rendering | Pending |
-| Resources | binary copying, collision/security checks, source/edit links | Pending |
-| Build | deterministic manifest, strict mode, diagnostic aggregation, no partial success claims | Pending |
-| Incremental | content/dependency cache, stale output handling, forced rebuild | Pending |
-| CLI | initialize, build, metadata, serve/watch, help, exit statuses | Pending |
-| Export | JSON model and printable/PDF output with explicit tool errors | Pending |
-| Extensions | processors, postprocessors, metadata transforms, custom templates | Pending |
-| Release | full tests, mutation, package archive/install, wiki and platform CI | Pending |
-
-Pudu declarations are the native metadata input. Runtime-specific assembly reflection and
-compiler-project loading require a separately designed importer rather than a claimed native API.
+| Capability | Acceptance boundary | Module | State |
+| --- | --- | --- | --- |
+| Paths | portable relative output, safe hrefs, slugs, joins without escaping the root, relative links | Paths | Done |
+| Metadata values | JSON/YAML values, lookup, deep merge, glob-scoped file metadata, compact YAML sequences | Meta | Done |
+| Articles | CommonMark blocks and inlines, setext/ATX headings, nested and task lists, loose/tight, pipe tables with alignment, quotes, fences, indented code, sanitized HTML, entities (full HTML table), emoji (full Unicode 18 table), autolinks and bare addresses | Markdown, Inline, Markdown/* | Done |
+| Emphasis extras | `~sub~`, `^sup^`, `++inserted++`, `==marked==` | Inline | Done |
+| Footnotes | `[^label]` references and definitions, back links | Markdown | Done |
+| Media links | images pointing at video hosts or video files become embeds | Markdown/Phrase | Done |
+| Authoring | front matter, block and inline includes with cycle checks, code excerpts by region/lines/highlight/dedent, `:::code`, alerts with custom kinds and classes, video, math, mermaid, image directive, row/column layout | Markdown/* | Done |
+| PlantUML | `plantuml` fences rendered through a configurable remote server | Markdown/Render | Done |
+| Tabs | tab groups ended by `---` or `***`, synchronized ids, dependent tabs by condition | Markdown/Blocks, Theme | Done |
+| Highlighting | static coloring by linguist language identity, aliases, extensions, file names | Markdown/Highlight, Languages | Done |
+| API metadata | Pudu modules, records, unions, aliases, traits, impls, functions, constants, docs, filters, private members, source links | Api/* | Done |
+| API layouts | nested or flattened module navigation, members on the same or separate pages | Api/Catalog, Api/Pages | Open |
+| API page format | `#YamlMime:ApiPage` input rendering; `apiPage`, `json`, `markdown` metadata output | Api | Open |
+| HTTP API | OpenAPI 3 and Swagger 2 in JSON/YAML, tags, parameters, bodies, responses, schemas, local references | Rest/* | Done |
+| Navigation | YAML/JSON/Markdown TOC, nested and folder TOCs, uid items, breadcrumbs, previous/next | Navigation/* | Done |
+| TOC metadata | `order`, TOC-level metadata, items titled from their article | Navigation | Done |
+| References | uid registry, duplicate refusal, xrefmap YAML/JSON read and write, external maps, `displayProperty`/`text` | References, Markdown/Phrase | Done |
+| Overwrite files | `uid` sections replacing summary, remarks, or any property; `*content` | Build | Open |
+| Templates | Mustache layout and partials, overrides, `public/main.css`, `public/main.js`, `token.json`, template variables | Template, Theme | Open (public files, tokens) |
+| Site chrome | header, navbar, TOC filter, breadcrumbs, affix, pager, actions, dark/light/auto, print, landing and chromeless layouts, analytics, new-tab links, logo link | Theme, Site/View | Open (layouts, flags) |
+| Page metadata and SEO | tab title with `_appTitle` suffix, favicon, touch icon, theme color, description, keywords, author, canonical, robots, Open Graph and Twitter cards, `_meta` tags, JSON-LD breadcrumbs, analytics tag | Site/View, Theme | Done |
+| Style and script injection | template `public/main.css` and `public/main.js` loaded after the defaults; `_appStyle` and `_appScript` for other files | Build, Theme | Open |
+| Search | index of indexable pages, ranked client search with keyboard use | Site/Search, Theme | Done |
+| Sitemap | base URL, priority, change frequency, per-glob options, last modified | Site/Sitemap | Done |
+| Redirects and 404 | `redirect_url` pages; a not-found page for static hosts | Site/Redirect, Build | Open |
+| Configuration | typed `docgen.json`/`docgen.yml`, mappings, metadata files, rules, warnings as errors, dry runs | Configuration | Done |
+| Build | complete validation before output, link and fragment checks, manifest with generator version, raw and view model export | Build | Open |
+| Git features | last modified dates, edit links from repository settings, CI variables, overrides by environment | Docset | Open |
+| Incremental output | unchanged files kept, stale outputs removed | Docset | Open |
+| CLI | build, metadata, serve, pdf, init, download, merge, template list/export, version, help, exit statuses | Command | Open |
+| PDF | per-TOC printable documents, cover page, TOC page, header and footer templates, renderer command | Export | Open |
+| Release | full tests, mutation score, examples, CI, wiki API docs | tools, examples | Open |
 
 ## Referenced by
 

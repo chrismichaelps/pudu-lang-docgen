@@ -1,0 +1,116 @@
+/** @Docgen.References.Module — unique identities and exchanged cross-reference maps */
+module PuduLangDocgen.References
+
+import Std.Json as Json
+import Std.List as List
+import Std.Map as Map
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.Yaml as Yaml
+
+/// References by identity: page identities first, then external maps. A page identity
+/// declared twice is an error; an external identity already known is skipped.
+export fn registry(own: &Array[Docgen.Reference], external: &Array[Docgen.Reference]) -> (Map[Str, Docgen.Reference], Array[Docgen.Diagnostic]) {
+  var found: Map[Str, Docgen.Reference] = mapOf([])
+  var problems: Array[Docgen.Diagnostic] = []
+  for reference in *own {
+    if reference.uid.isEmpty() { continue }
+    match Map.get(&found, reference.uid) {
+      case Some(earlier) => { problems = problems.push(Docgen.error(Codes.UID_DUPLICATE, reference.href, 1, "uid " + reference.uid + " is also declared by " + earlier.href)) }
+      case None => { found = Map.insert(&found, reference.uid, reference) }
+    }
+  }
+  for reference in *external {
+    if !reference.uid.isEmpty() && !Map.containsKey(&found, reference.uid) { found = Map.insert(&found, reference.uid, reference) }
+  }
+  (found, problems)
+}
+
+/// A cross-reference map as YAML, sorted by identity. Relative destinations are relative to
+/// the site root, which `baseUrl` names when it is not empty.
+export fn toYaml(references: &Array[Docgen.Reference], baseUrl: Str) -> Str {
+  var lines = ["### YamlMime:XRefMap", "sorted: true"]
+  if !baseUrl.isEmpty() { lines = lines.push("baseUrl: " + Yaml.scalar(baseUrl)) }
+  lines = lines.push("references:")
+  for reference in sorted(references) {
+    lines = lines.push("- uid: " + Yaml.scalar(reference.uid))
+    lines = lines.push("  name: " + Yaml.scalar(reference.name))
+    if !reference.fullName.isEmpty() { lines = lines.push("  fullName: " + Yaml.scalar(reference.fullName)) }
+    lines = lines.push("  href: " + Yaml.scalar(reference.href))
+    if !reference.kind.isEmpty() { lines = lines.push("  type: " + Yaml.scalar(reference.kind)) }
+  }
+  lines.join("\n") + "\n"
+}
+
+/// A cross-reference map as JSON with the same fields as the YAML form.
+export fn toJson(references: &Array[Docgen.Reference], baseUrl: Str) -> Str {
+  let entries = sorted(references).map(fn(reference: Docgen.Reference) -> Json.Json {
+      var fields = [("uid", Json.Text(reference.uid)), ("name", Json.Text(reference.name))]
+      if !reference.fullName.isEmpty() { fields = fields.push(("fullName", Json.Text(reference.fullName))) }
+      fields = fields.push(("href", Json.Text(reference.href)))
+      if !reference.kind.isEmpty() { fields = fields.push(("type", Json.Text(reference.kind))) }
+      Json.object(&fields)
+    })
+  var top = [("sorted", Json.Boolean(true))]
+  if !baseUrl.isEmpty() { top = top.push(("baseUrl", Json.Text(baseUrl))) }
+  Json.encodePretty(&Json.object(&top.push(("references", Json.list(&entries)))))
+}
+
+/// References read from a YAML or JSON cross-reference map. Relative destinations resolve
+/// against the map's `baseUrl`, or else against the address the map was read from.
+export fn parse(origin: Str, text: Str) -> Result[Array[Docgen.Reference], Str] {
+  let trimmed = text.trim()
+  let value = if trimmed.startsWith("\{") {
+    match Json.decode(trimmed) {
+      case Ok(found) => Meta.fromJson(&found)
+      case Err(problem) => { return Err("cross-reference map is not valid JSON: " + Json.explain(&problem)) }
+    }
+  } else { Yaml.decode(text) ? }
+  let fields = match value {
+    case Docgen.Fields(found) => found
+    case _ => { return Err("cross-reference map must be a mapping with references") }
+  }
+  let base = Meta.textOr(&fields, "baseUrl", "")
+  let listed = match Meta.get(&fields, "references") {
+    case Some(Docgen.Items(found)) => found
+    case Some(Docgen.Nothing) => []
+    case None => []
+    case _ => { return Err("references must be a list") }
+  }
+  var result: Array[Docgen.Reference] = []
+  for held in listed {
+    let entry = match held {
+      case Docgen.Fields(found) => found
+      case _ => { return Err("each reference must be a mapping") }
+    }
+    let uid = Meta.textOr(&entry, "uid", "")
+    let href = Meta.textOr(&entry, "href", "")
+    if uid.isEmpty() { return Err("a reference has no uid") }
+    if !href.isEmpty() && !Paths.href(href) { return Err("reference " + uid + " has an unsafe href") }
+    let located = if href.isEmpty() || Paths.remote(href) { href } else { absolute(base, origin, href) }
+    result = result.push(Docgen.Reference{uid: uid, name: Meta.textOr(&entry, "name", uid), fullName: Meta.textOr(&entry, "fullName", ""), href: located, kind: Meta.textOr(&entry, "type", "")})
+  }
+  Ok(result)
+}
+
+/// References of published pages that declare an identity.
+export fn ofPages(pages: &Array[Docgen.Page]) -> Array[Docgen.Reference] {
+  pages.filter(|page: Docgen.Page| !page.uid.isEmpty()).map(|page: Docgen.Page| Docgen.Reference{uid: page.uid, name: page.title, fullName: page.title, href: page.path, kind: page.kind})
+}
+
+/// References ordered by identity.
+fn sorted(references: &Array[Docgen.Reference]) -> Array[Docgen.Reference] {
+  List.sortBy(references, |left: Docgen.Reference, right: Docgen.Reference| left.uid < right.uid)
+}
+
+/// A destination joined to a base address, or to the folder of the address a map came from.
+fn absolute(base: Str, origin: Str, href: Str) -> Str {
+  if !base.isEmpty() { return if base.endsWith("/") { base + href } else { base + "/" + href } }
+  if Paths.remote(origin) {
+    let cut = origin.split("/")
+    return cut.slice(0, cut.length() - 1).join("/") + "/" + href
+  }
+  href
+}

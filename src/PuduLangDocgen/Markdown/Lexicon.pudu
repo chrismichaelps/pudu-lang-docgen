@@ -1,0 +1,129 @@
+/** @Docgen.Markdown.Lexicon — character references, short codes, tags, and web addresses */
+module PuduLangDocgen.Markdown.Lexicon
+
+import Std.Char as Char
+import Std.Set as Set
+import PuduLangDocgen.Markdown.Emoji as Emoji
+import PuduLangDocgen.Markdown.Entities as Entities
+
+/// Inline HTML elements kept as markup; every other tag is shown as text.
+const TAGS: Set[Str] = setOf([
+    "abbr", "b", "br", "cite", "code", "del", "dfn", "em", "i", "ins", "kbd", "mark", "q", "s", "samp",
+    "small", "strong", "sub", "sup", "time", "u", "var", "wbr"
+  ])
+
+/// Longest name a character reference may have.
+const NAME_LIMIT: Int = 32
+
+/// Longest emoji short code.
+const CODE_LIMIT: Int = 96
+
+/// Text of the characters in a half-open range.
+export fn slice(cs: &Array[Char], from: Int, to: Int) -> Str {
+  var pieces: Array[Str] = []
+  for index in from..to { pieces = pieces.push(cs[index].toText()) }
+  pieces.join("")
+}
+
+/// Whether a character counts as white space between words.
+export fn blank(character: Char) -> Bool { Char.isWhitespace(character) || character == '\u{a0}' }
+
+/// A decoded character reference at an index and the index after it.
+export fn entity(cs: &Array[Char], index: Int, to: Int) -> Option[(Str, Int)] {
+  var end = index + 1
+  while end < to && end - index <= NAME_LIMIT && cs[end] != ';' && (Char.isAlphanumeric(cs[end]) || cs[end] == '#') { end = end + 1 }
+  if end >= to || cs[end] != ';' || end == index + 1 { return None }
+  let name = slice(cs, index + 1, end)
+  if !name.startsWith("#") {
+    let decoded = Entities.lookup(name) ?
+    return Some((decoded, end + 1))
+  }
+  let hex = name.startsWith("#x") || name.startsWith("#X")
+  let digits = if hex { name.drop(2) } else { name.drop(1) }
+  if digits.isEmpty() || digits.length() > 7 { return None }
+  var value = 0
+  for digit in digits.chars() {
+    let amount = if hex { Char.toHexDigit(digit) ? } else { Char.toDigit(digit) ? }
+    value = value * (if hex { 16 } else { 10 }) + amount
+  }
+  if value == 0 || value > 1114111 { return Some(("\u{fffd}", end + 1)) }
+  match Char.fromCode(value) {
+    case Some(decoded) => Some((decoded.toText(), end + 1))
+    case None => Some(("\u{fffd}", end + 1))
+  }
+}
+
+/// The emoji a `:name:` short code at an index stands for, and the index after it.
+export fn emoji(cs: &Array[Char], index: Int, to: Int) -> Option[(Str, Int)] {
+  var end = index + 1
+  while end < to && end - index <= CODE_LIMIT && (Char.isAlphanumeric(cs[end]) || "_+-".contains(cs[end].toText())) { end = end + 1 }
+  if end >= to || cs[end] != ':' { return None }
+  let picture = Emoji.lookup(slice(cs, index + 1, end)) ?
+  Some((picture, end + 1))
+}
+
+/// A bare web address starting with `http://`, `https://`, or `www.`, and the index after it.
+/// Trailing punctuation and unbalanced closing parentheses stay outside the address.
+export fn address(cs: &Array[Char], index: Int, to: Int) -> Option[(Str, Int)] {
+  let before = if index > 0 { cs[index - 1] } else { ' ' }
+  if index > 0 && !blank(before) && !"(*_~".contains(before.toText()) { return None }
+  let head = slice(cs, index, if index + 8 <= to { index + 8 } else { to }).toLower()
+  let web = head.startsWith("www.")
+  if !head.startsWith("https://") && !head.startsWith("http://") && !web { return None }
+  var end = index
+  while end < to && !blank(cs[end]) && cs[end] != '<' { end = end + 1 }
+  var opened = 0
+  for position in index..end {
+    if cs[position] == '(' { opened = opened + 1 }
+    if cs[position] == ')' { opened = opened - 1 }
+  }
+  var trimming = true
+  while trimming && end > index {
+    let last = cs[end - 1]
+    if ".,:;!?\"'*_~".contains(last.toText()) { end = end - 1 } else if last == ')' && opened < 0 {
+      opened = opened + 1
+      end = end - 1
+    } else { trimming = false }
+  }
+  let written = slice(cs, index, end)
+  let minimum = if web { 5 } else { written.indexOf("//") + 3 }
+  if written.length() < minimum { return None }
+  Some((written, end))
+}
+
+/// Whether text inside angle brackets is an autolink, answering its destination.
+export fn autolink(inner: Str) -> Option[Str] {
+  if inner.contains(" ") || inner.contains("\n") || inner.isEmpty() { return None }
+  let lowered = inner.toLower()
+  if lowered.startsWith("https://") || lowered.startsWith("http://") || lowered.startsWith("mailto:") { return Some(inner) }
+  let sign = inner.indexOf("@")
+  if sign > 0 && inner.drop(sign + 1).contains(".") && !inner.contains(":") && !inner.contains("/") { return Some("mailto:" + inner) }
+  None
+}
+
+/// Allowed inline HTML rebuilt without attributes other than `title`, or none for other tags.
+export fn tag(inner: Str) -> Option[Str] {
+  let closing = inner.startsWith("/")
+  let body = if closing { inner.drop(1) } else { inner }
+  let name = body.split(" ")[0].split("/")[0].split("\n")[0].toLower()
+  if !Set.contains(&TAGS, name) { return None }
+  if closing { return Some("</" + name + ">") }
+  if name == "br" || name == "wbr" { return Some("<" + name + ">") }
+  let title = attribute(body, "title")
+  if title.isEmpty() { Some("<" + name + ">") } else { Some("<" + name + " title=\"" + escaped(title) + "\">") }
+}
+
+/// The double-quoted value of a named attribute inside a tag, or the empty text.
+export fn attribute(element: Str, name: Str) -> Str {
+  let marker = name + "=\""
+  var start = element.indexOf(" " + marker)
+  if start < 0 && element.startsWith(marker) { start = -1 } else if start < 0 { return "" }
+  let rest = element.drop(start + 1 + marker.length())
+  let end = rest.indexOf("\"")
+  if end < 0 { "" } else { rest.take(end) }
+}
+
+/// Text escaped for a quoted attribute.
+fn escaped(text: Str) -> Str {
+  text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;")
+}

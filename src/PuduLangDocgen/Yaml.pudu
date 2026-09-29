@@ -1,0 +1,211 @@
+/** @Docgen.Yaml.Module — YAML read into metadata and metadata written as YAML */
+module PuduLangDocgen.Yaml
+
+import Std.Option as Option
+import Std.Text as Text
+import Std.Yaml as Reader
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+
+/// YAML text decoded as metadata. Block scalars are read here, keeping blank lines and
+/// working inside list items, and sequences written at their parent key's indentation are
+/// indented, two layouts the standard decoder loses.
+export fn decode(source: Str) -> Result[Docgen.Meta, Str] {
+  let (plain, blocks) = extractBlocks(source)
+  match Reader.decode(indentSequences(plain)) {
+    case Ok(found) => Ok(restore(Meta.fromYaml(&found), &blocks))
+    case Err(problem) => Err(Reader.explain(&problem))
+  }
+}
+
+/// Compact block sequences indented two columns under their key, keeping every other line.
+fn indentSequences(source: Str) -> Str {
+  let lines = source.split("\n")
+  var shifts: Array[Int] = []
+  var result: Array[Str] = []
+  var index = 0
+  for line in lines {
+    let content = line.trim()
+    if content.isEmpty() || content.startsWith("#") {
+      result = result.push(line)
+      index = index + 1
+      continue
+    }
+    let column = line.length() - Text.trimStart(line).length()
+    while !shifts.isEmpty() && !(column > shifts[shifts.length() - 1] || (column == shifts[shifts.length() - 1] && content.startsWith("- "))) {
+      shifts = shifts.slice(0, shifts.length() - 1)
+    }
+    var padding: Array[Str] = []
+    for _level in 0..shifts.length() { padding = padding.push("  ") }
+    result = result.push(padding.join("") + line)
+    if content.endsWith(":") {
+      let key = if content.startsWith("- ") { column + 2 } else { column }
+      var ahead = index + 1
+      while ahead < lines.length() && (lines[ahead].trim().isEmpty() || lines[ahead].trim().startsWith("#")) { ahead = ahead + 1 }
+      if ahead < lines.length() {
+        let next = lines[ahead]
+        let nextColumn = next.length() - Text.trimStart(next).length()
+        if nextColumn == key && next.trim().startsWith("- ") { shifts = shifts.push(key) }
+      }
+    }
+    index = index + 1
+  }
+  result.join("\n")
+}
+
+/// Marks the start of a placeholder that stands for an extracted block scalar.
+const BLOCK: Str = "\u{2}"
+
+/// Block scalar indicators recognized at the end of a key or list line.
+const INDICATORS: Array[Str] = ["|", "|-", "|+", ">", ">-", ">+"]
+
+/// Text with each block scalar replaced by a quoted placeholder, and the scalars' values.
+fn extractBlocks(source: Str) -> (Str, Array[Str]) {
+  let all = source.split("\n")
+  var kept: Array[Str] = []
+  var texts: Array[Str] = []
+  var index = 0
+  while index < all.length() {
+    let line = all[index]
+    let trimmed = Text.trimEnd(line)
+    var indicator = ""
+    for candidate in INDICATORS {
+      if trimmed.endsWith(": " + candidate) || trimmed == "- " + candidate || trimmed.endsWith(" - " + candidate) { indicator = candidate }
+    }
+    if indicator.isEmpty() {
+      kept = kept.push(line)
+      index = index + 1
+      continue
+    }
+    let parent = line.length() - Text.trimStart(line).length()
+    var end = index + 1
+    var body: Array[Str] = []
+    while end < all.length() && (all[end].trim().isEmpty() || all[end].length() - Text.trimStart(all[end]).length() > parent) {
+      body = body.push(all[end])
+      end = end + 1
+    }
+    var depth = 1000000
+    for held in body {
+      if !held.trim().isEmpty() {
+        let column = held.length() - Text.trimStart(held).length()
+        if column < depth { depth = column }
+      }
+    }
+    var content = body.map(|held: Str| if held.trim().isEmpty() { "" } else { held.drop(depth) })
+    var trailing = 0
+    while content.length() > trailing && content[content.length() - 1 - trailing].isEmpty() { trailing = trailing + 1 }
+    let lines = content.slice(0, content.length() - trailing)
+    var value = if indicator.startsWith(">") { folded(&lines) } else { lines.join("\n") }
+    if indicator.endsWith("+") { for _extra in 0..(trailing + 1) { value = value + "\n" } }
+      else if !indicator.endsWith("-") && !lines.isEmpty() { value = value + "\n" }
+    kept = kept.push(trimmed.take(trimmed.length() - indicator.length()) + "\"" + BLOCK + show(texts.length()) + "\"")
+    texts = texts.push(value)
+    index = end
+  }
+  (kept.join("\n"), texts)
+}
+
+/// Lines of a folded scalar joined by spaces, with blank lines kept as line breaks.
+fn folded(lines: &Array[Str]) -> Str {
+  var pieces: Array[Str] = []
+  var previous = ""
+  for line in *lines {
+    if line.isEmpty() { pieces = pieces.push("\n") }
+      else if !pieces.isEmpty() && previous != "" && !line.startsWith(" ") { pieces = pieces.push(" " + line) }
+      else { pieces = pieces.push(line) }
+    previous = line
+  }
+  pieces.join("")
+}
+
+/// Metadata with block scalar placeholders replaced by their values.
+fn restore(value: Docgen.Meta, texts: &Array[Str]) -> Docgen.Meta {
+  if texts.isEmpty() { return value }
+  match value {
+    case Docgen.Text(written) => {
+      if written.startsWith(BLOCK) {
+        match written.drop(1).toInt() {
+          case Some(position) => { if position >= 0 && position < texts.length() { return Docgen.Text(texts[position]) } }
+          case None => {}
+        }
+      }
+      Docgen.Text(written)
+    }
+    case Docgen.Items(listed) => Docgen.Items(listed.map(|held: Docgen.Meta| restore(held, texts)))
+    case Docgen.Fields(fields) => Docgen.Fields(fields.map(fn(entry: (Str, Docgen.Meta)) -> (Str, Docgen.Meta) {
+          let (key, held) = entry
+          (key, restore(held, texts))
+        }))
+    case other => other
+  }
+}
+
+/// Characters that make a YAML scalar need quotes.
+const SPECIAL: Str = ":#[]\{\},&*!|>'\"%@`"
+
+/// Metadata written as YAML, keys in their order; nested values indent by two spaces.
+export fn encode(value: &Docgen.Meta) -> Str { emitted(value, "").join("\n") + "\n" }
+
+/// YAML lines of a value at an indentation.
+fn emitted(value: &Docgen.Meta, indent: Str) -> Array[Str] {
+  match value {
+    case Docgen.Fields(fields) => {
+      if fields.isEmpty() { return [indent + "\{\}"] }
+      var lines: Array[Str] = []
+      for (key, held) in fields {
+        let head = indent + scalar(key) + ":"
+        match held {
+          case Docgen.Fields(inner) => { lines = if inner.isEmpty() { lines.push(head + " \{\}") } else { lines.push(head).concat(emitted(&held, indent + "  ")) } }
+          case Docgen.Items(listed) => { lines = if listed.isEmpty() { lines.push(head + " []") } else { lines.push(head).concat(emitted(&held, indent)) } }
+          case other => { lines = lines.push(head + " " + leaf(&other, indent + "  ")) }
+        }
+      }
+      lines
+    }
+    case Docgen.Items(listed) => {
+      if listed.isEmpty() { return [indent + "[]"] }
+      var lines: Array[Str] = []
+      for held in listed {
+        let nested = emitted(&held, indent + "  ")
+        match held {
+          case Docgen.Fields(_fields) => { lines = lines.push(indent + "- " + nested[0].drop(indent.length() + 2)).concat(nested.slice(1, nested.length())) }
+          case Docgen.Items(_items) => { lines = lines.push(indent + "-").concat(nested) }
+          case other => { lines = lines.push(indent + "- " + leaf(&other, indent + "  ")) }
+        }
+      }
+      lines
+    }
+    case other => [indent + leaf(&other, indent + "  ")]
+  }
+}
+
+/// A scalar value as YAML; text spanning lines becomes a literal block at the indentation.
+fn leaf(value: &Docgen.Meta, indent: Str) -> Str {
+  match value {
+    case Docgen.Text(written) => {
+      if !written.contains("\n") { return scalar(written) }
+      let body = written.split("\n").map(|line: Str| if line.isEmpty() { "" } else { indent + line }).join("\n")
+      (if written.endsWith("\n") { "|" } else { "|-" }) + "\n" + body
+    }
+    case Docgen.Whole(count) => show(count)
+    case Docgen.Flag(held) => if held { "true" } else { "false" }
+    case _ => "null"
+  }
+}
+
+/// A YAML scalar, quoted when plain text would be read differently. Quoting prefers a form
+/// without escape sequences, which every YAML reader agrees on.
+export fn scalar(written: Str) -> Str {
+  var plain = !written.isEmpty() && written == written.trim()
+  var control = false
+  for character in written.chars() {
+    if SPECIAL.contains(character.toText()) { plain = false }
+    if character < ' ' { control = true }
+  }
+  let lowered = written.toLower()
+  if ["true", "false", "yes", "no", "null", "~", "on", "off"].contains(lowered) || Option.isSome(&written.toInt()) { plain = false }
+  if plain && !control { return written }
+  if !control && !written.contains("\"") && !written.contains("\\") { return "\"" + written + "\"" }
+  if !control && !written.contains("'") { return "'" + written + "'" }
+  "\"" + written.replace("\\", "\\\\").replace("\"", "\\\"").replace("\n", "\\n").replace("\t", "\\t") + "\""
+}

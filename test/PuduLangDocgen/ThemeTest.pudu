@@ -1,0 +1,80 @@
+/** @Docgen.Theme.Tests — the layout, its overrides, and site-wide files render as specified */
+module PuduLangDocgen.ThemeTest
+
+import Std.Io as Io
+import Std.Test as Test
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Site.Redirect as Redirect
+import PuduLangDocgen.Site.Search as Search
+import PuduLangDocgen.Site.Sitemap as Sitemap
+import PuduLangDocgen.Site.Strings as Strings
+import PuduLangDocgen.Site.View as View
+import PuduLangDocgen.Theme as Theme
+
+/// A page with metadata and two sections.
+fn page(meta: Array[(Str, Docgen.Meta)]) -> Docgen.Page {
+  Docgen.Page{path: "guide/a.html", source: "docs/guide/a.md", kind: "article", title: "Alpha <1>", uid: "", summary: "About alpha.", body: "<h2 id=\"one\">One</h2><h2 id=\"two\">Two</h2>", headings: [Docgen.Heading{id: "one", title: "One", level: 2}, Docgen.Heading{id: "two", title: "Two", level: 2}], links: [], meta: meta}
+}
+
+/// A frame with navigation, history, and a PDF.
+fn frame() -> View.Frame {
+  let item = Docgen.TocItem{title: "Alpha", href: "guide/a.html", uid: "", expanded: false, children: []}
+  let group = Docgen.TocItem{title: "Guide", href: "", uid: "", expanded: false, children: [item]}
+  View.Frame{navbar: [Docgen.TocItem{..group, href: "guide/a.html", children: []}], toc: [group], trail: [group, item], previous: None, next: Some(Docgen.TocItem{..item, title: "Beta", href: "guide/b.html"}), editUrl: "https://git.example/edit", updated: "2026-09-01", features: ["math"], root: "", pdf: "guide/toc.pdf", tocPath: "guide/toc.json", navPath: "toc.json"}
+}
+
+/// A page rendered through the default layout.
+fn rendered(meta: Array[(Str, Docgen.Meta)]) -> Str {
+  match Theme.load(&[]) {
+    case Ok(look) => Theme.page(&look, &View.view(&page(meta), &frame()))
+    case Err(_) => ""
+  }
+}
+
+/// Runs every layout, override, view, string, search, sitemap, and redirect contract.
+fn main() -> Int {
+  let html = rendered([("_appTitle", Docgen.Text("Site")), ("_lang", Docgen.Text("es")), ("_baseUrl", Docgen.Text("https://docs.example")), ("keywords", Docgen.Items([Docgen.Text("a"), Docgen.Text("b")])), ("_meta", Docgen.Fields([("owner", Docgen.Text("team"))])), ("_googleAnalyticsTagId", Docgen.Text("G-1"))])
+  let landing = rendered([("_layout", Docgen.Text("landing"))])
+  let chromeless = rendered([("_layout", Docgen.Text("chromeless"))])
+  let override = match Theme.load(&[("partials/footer.html", "<footer>custom \{\{siteName\}\}</footer>"), ("partials/extra.html", "x"), ("notes.txt", "ignored")]) {
+    case Ok(look) => Theme.page(&look, &View.view(&page([]), &frame()))
+    case Err(_) => ""
+  }
+  let broken = match Theme.load(&[("layout.html", "\{\{#open\}\}")]) {
+    case Ok(_) => []
+    case Err(found) => found.map(|problem: Docgen.Diagnostic| problem.code)
+  }
+  let checks = Test.suite("Theme", &[
+      Test.equals("assets", &Theme.assets().map(|artifact: Docgen.Artifact| artifact.path), &["_assets/site.css", "_assets/site.js"]),
+      Test.that("stylesheet has both schemes and print", Theme.assets()[0].content.contains("[data-theme=\"dark\"]") && Theme.assets()[0].content.contains("@media print")),
+      Test.that("escaped tab title", html.contains("<title>Alpha &lt;1&gt; | Site</title>")),
+      Test.that("language", html.contains("<html lang=\"es\"")),
+      Test.that("localized text", html.contains("Buscar") && html.contains("En este artículo")),
+      Test.that("description and keywords", html.contains("<meta name=\"description\" content=\"About alpha.\">") && html.contains("<meta name=\"keywords\" content=\"a, b\">")),
+      Test.that("social cards", html.contains("<meta property=\"og:type\" content=\"article\">") && html.contains("<meta name=\"twitter:card\" content=\"summary\">")),
+      Test.that("custom meta", html.contains("<meta name=\"owner\" content=\"team\">")),
+      Test.that("canonical and structured data", html.contains("<link rel=\"canonical\" href=\"https://docs.example/guide/a.html\">") && html.contains("\"@type\":\"BreadcrumbList\"")),
+      Test.that("analytics", html.contains("gtag/js?id=G-1")),
+      Test.that("navbar active", html.contains("aria-current=\"true\" class=\"active\">Guide</a>")),
+      Test.that("toc tree", html.contains("<button type=\"button\" class=\"toc-group\" aria-expanded=\"true\">Guide</button>") && html.contains("aria-current=\"page\">Alpha</a>")),
+      Test.that("breadcrumb", html.contains("<span aria-current=\"page\">Alpha &lt;1&gt;</span>")),
+      Test.that("actions", html.contains("href=\"https://git.example/edit\"") && html.contains("<time datetime=\"2026-09-01\">") && html.contains("href=\"toc.pdf\"")),
+      Test.that("pager", html.contains("href=\"b.html\" rel=\"next\"") && !html.contains("rel=\"prev\"")),
+      Test.that("affix", html.contains("<a href=\"#one\">One</a>")),
+      Test.that("math script", html.contains("mathjax")),
+      Test.that("landing drops navigation panes", !landing.contains("class=\"sidebar\"") && !landing.contains("class=\"affix\"") && landing.contains("layout-landing")),
+      Test.that("chromeless drops header and footer", !chromeless.contains("class=\"site-header\"") && !chromeless.contains("class=\"site-footer\"")),
+      Test.that("partial override", override.contains("<footer>custom Documentation</footer>")),
+      Test.equals("invalid template", &broken, &[Codes.TEMPLATE_INVALID]),
+      Test.equals("strings fall back to English", &Strings.forLanguage("xx", &[]), &Strings.forLanguage("en", &[])),
+      Test.that("string override", match Strings.forLanguage("en", &[("search", Docgen.Text("Find"))]) { case Docgen.Fields(fields) => fields.contains(("search", Docgen.Text("Find"))) case _ => false }),
+      Test.equals("plain text", &Search.plainText("<p>a &amp; <b>b</b></p><script>x()</script><button>Copy</button> c"), &"a & b c"),
+      Test.that("search skips hidden pages", !Search.index(&[page([("_noindex", Docgen.Flag(true))])]).contains("guide/a.html") && Search.index(&[page([])]).contains("\"title\":\"Alpha <1>\"")),
+      Test.equals("sitemap", &Sitemap.render(&[page([])], &Sitemap.Options{baseUrl: "https://docs.example", priority: "0.5", changefreq: "daily", files: [("docs/guide/**", [("priority", Docgen.Text("0.9"))])]}, &[("guide/a.html", "2026-09-01")]), &"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n  <url>\n    <loc>https://docs.example/guide/a.html</loc>\n    <lastmod>2026-09-01</lastmod>\n    <changefreq>daily</changefreq>\n    <priority>0.9</priority>\n  </url>\n</urlset>\n"),
+      Test.that("redirect", Redirect.page("Old", "new.html?a=1&b=2").contains("<meta http-equiv=\"refresh\" content=\"0; url=new.html?a=1&amp;b=2\">"))
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

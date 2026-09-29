@@ -1,0 +1,75 @@
+/** @Docgen.Markdown.Syntax — article tree shared by parsing and rendering */
+module PuduLangDocgen.Markdown.Syntax
+
+/** @Docgen.Markdown.Target — a link or image destination as written */
+export type Target = { destination: Str, title: Str, line: Int }
+
+/** @Docgen.Markdown.XrefSpan — a cross reference by identity with optional display text */
+export type XrefSpan = { uid: Str, text: Array[Inline], display: Str, line: Int, optional: Bool }
+
+/** @Docgen.Markdown.Inline — phrasing content inside one block */
+export type Inline
+  = Text(Str)
+  | Code(Str)
+  | Emphasis(Array[Inline])
+  | Strong(Array[Inline])
+  | Strike(Array[Inline])
+  | Subscript(Array[Inline])
+  | Superscript(Array[Inline])
+  | Inserted(Array[Inline])
+  | Marked(Array[Inline])
+  | Note(Str)
+  | Anchor(Target, Array[Inline])
+  | Picture(Target, Str)
+  | Xref(XrefSpan)
+  | Math(Str)
+  | Markup(Str)
+  | LineBreak
+  | SoftBreak
+  | Fragment(Str, Array[Inline])
+
+/** @Docgen.Markdown.Title — a section heading with an optional explicit fragment */
+export type Title = { level: Int, content: Array[Inline], id: Str, line: Int }
+
+/** @Docgen.Markdown.Sample — code with language, caption, and emphasized lines */
+export type Sample = { language: Str, title: Str, text: Str, highlight: Array[Int], line: Int }
+
+/** @Docgen.Markdown.Item — one list entry; checked is -1 without a box, 0 open, 1 done */
+export type Item = { checked: Int, blocks: Array[Block] }
+
+/** @Docgen.Markdown.Listing — ordered or bullet list with its first number */
+export type Listing = { ordered: Bool, start: Int, tight: Bool, items: Array[Item] }
+
+/** @Docgen.Markdown.Table — header and body cells with per-column alignment */
+export type Table = { align: Array[Str], header: Array[Array[Inline]], rows: Array[Array[Array[Inline]]] }
+
+/** @Docgen.Markdown.Notice — highlighted aside such as a note or warning */
+export type Notice = { kind: Str, blocks: Array[Block] }
+
+/** @Docgen.Markdown.Tab — one titled panel; tabs sharing an id switch together */
+export type Tab = { id: Str, title: Str, condition: Str, blocks: Array[Block] }
+
+/** @Docgen.Markdown.Column — one cell of a row layout spanning grid units */
+export type Column = { span: Int, blocks: Array[Block] }
+
+/** @Docgen.Markdown.Figure — an image with alternate text, kind, and optional caption */
+export type Figure = { source: Str, alt: Str, kind: Str, lightbox: Str, caption: Array[Block], line: Int }
+
+/** @Docgen.Markdown.Block — structural content of an article */
+export type Block
+  = Heading(Title)
+  | Paragraph(Array[Inline])
+  | CodeBlock(Sample)
+  | Quote(Array[Block])
+  | ListBlock(Listing)
+  | TableBlock(Table)
+  | Rule
+  | HtmlBlock(Str)
+  | Alert(Notice)
+  | TabGroup(Array[Tab])
+  | Included(Str, Array[Block])
+  | Video(Str)
+  | MathBlock(Str)
+  | Grid(Array[Column])
+  | Image(Figure)
+  | Footnote(Str, Array[Block])

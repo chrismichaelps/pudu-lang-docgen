@@ -1,0 +1,244 @@
+/** @Docgen.Rest.OpenApi — HTTP interface descriptions read into operations and schemas */
+module PuduLangDocgen.Rest.OpenApi
+
+import Std.List as List
+import Std.Option as Option
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+
+/** @Docgen.Rest.Parameter — one request parameter and where it is sent */
+export type Parameter = { name: Str, location: Str, required: Bool, kind: Str, description: Str }
+
+/** @Docgen.Rest.Payload — a body for one media type */
+export type Payload = { media: Str, kind: Str }
+
+/** @Docgen.Rest.Response — one documented response */
+export type Response = { status: Str, description: Str, payloads: Array[Payload] }
+
+/** @Docgen.Rest.Operation — one method on one path */
+export type Operation = {
+  id: Str,
+  method: Str,
+  path: Str,
+  summary: Str,
+  description: Str,
+  tags: Array[Str],
+  parameters: Array[Parameter],
+  body: Array[Payload],
+  bodyRequired: Bool,
+  responses: Array[Response],
+  deprecated: Bool
+}
+
+/** @Docgen.Rest.Property — one property of an object schema */
+export type Property = { name: Str, kind: Str, required: Bool, description: Str }
+
+/** @Docgen.Rest.Schema — a named schema with its properties or shape */
+export type Schema = { name: Str, kind: Str, description: Str, properties: Array[Property], values: Array[Str] }
+
+/** @Docgen.Rest.Service — a described HTTP interface */
+export type Service = { title: Str, version: Str, description: Str, servers: Array[Str], operations: Array[Operation], schemas: Array[Schema] }
+
+/// Methods an operation may use, in the order a path lists them.
+const METHODS: Array[Str] = ["get", "put", "post", "delete", "options", "head", "patch", "trace"]
+
+/// Whether metadata is an HTTP interface description.
+export fn recognizes(value: &Docgen.Meta) -> Bool {
+  match value {
+    case Docgen.Fields(fields) => Option.isSome(&Meta.get(&fields, "openapi")) || Option.isSome(&Meta.get(&fields, "swagger"))
+    case _ => false
+  }
+}
+
+/// The service a description declares.
+export fn read(value: &Docgen.Meta) -> Result[Service, Str] {
+  let root = match value {
+    case Docgen.Fields(fields) => fields
+    case _ => { return Err("interface description must be an object") }
+  }
+  let info = Meta.fieldsOf(&root, "info")
+  let title = Meta.textOr(&info, "title", "")
+  if title.trim().isEmpty() { return Err("interface description needs info.title") }
+  var servers: Array[Str] = []
+  match Meta.get(&root, "servers") {
+    case Some(Docgen.Items(listed)) => {
+      for server in listed {
+        match server {
+          case Docgen.Fields(fields) => { servers = servers.push(Meta.textOr(&fields, "url", "")) }
+          case _ => {}
+        }
+      }
+    }
+    case _ => {
+      let host = Meta.textOr(&root, "host", "")
+      if !host.isEmpty() { servers = servers.push("https://" + host + Meta.textOr(&root, "basePath", "")) }
+    }
+  }
+  var operations: Array[Operation] = []
+  for (path, item) in Meta.fieldsOf(&root, "paths") {
+    let entries = match item {
+      case Docgen.Fields(found) => found
+      case _ => { return Err("path " + path + " must be an object") }
+    }
+    let shared = parameters(&root, &entries)
+    for method in METHODS {
+      let found = Meta.fieldsOf(&entries, method)
+      if !found.isEmpty() { operations = operations.push(operation(&root, path, method, &found, &shared)) }
+    }
+  }
+  let definitions = if Meta.get(&root, "swagger") != None { Meta.fieldsOf(&root, "definitions") } else { Meta.fieldsOf(&Meta.fieldsOf(&root, "components"), "schemas") }
+  var schemas: Array[Schema] = []
+  for (name, held) in definitions { schemas = schemas.push(schema(name, &held)) }
+  let sorted = List.sortBy(&schemas, |left: Schema, right: Schema| left.name < right.name)
+  Ok(Service{title: title, version: Meta.textOr(&info, "version", ""), description: Meta.textOr(&info, "description", ""), servers: servers, operations: operations, schemas: sorted})
+}
+
+/// A short description of a schema's type, naming referenced schemas by name.
+export fn describe(value: &Docgen.Meta) -> Str {
+  let fields = match value {
+    case Docgen.Fields(found) => found
+    case _ => { return "any" }
+  }
+  let reference = Meta.textOr(&fields, "$ref", "")
+  if !reference.isEmpty() { return refName(reference) }
+  let kind = Meta.textOr(&fields, "type", "")
+  if kind == "array" { return "array of " + describe(&Option.unwrapOr(Meta.get(&fields, "items"), Docgen.Nothing)) }
+  for combiner in ["oneOf", "anyOf", "allOf"] {
+    match Meta.get(&fields, combiner) {
+      case Some(Docgen.Items(options)) => { return options.map(|option: Docgen.Meta| describe(&option)).join(if combiner == "allOf" { " and " } else { " or " }) }
+      case _ => {}
+    }
+  }
+  let format = Meta.textOr(&fields, "format", "")
+  let base = if kind.isEmpty() { if Meta.get(&fields, "properties") != None { "object" } else { "any" } } else { kind }
+  if format.isEmpty() { base } else { base + " (" + format + ")" }
+}
+
+/// The schema name at the end of a local reference such as `#/components/schemas/Pet`.
+export fn refName(reference: Str) -> Str {
+  let parts = reference.split("/")
+  parts[parts.length() - 1]
+}
+
+/// The value a local reference points to, or the value itself when it is not a reference.
+fn dereferenced(root: &Array[(Str, Docgen.Meta)], value: &Docgen.Meta) -> Docgen.Meta {
+  let fields = match value {
+    case Docgen.Fields(found) => found
+    case _ => { return *value }
+  }
+  let reference = Meta.textOr(&fields, "$ref", "")
+  if !reference.startsWith("#/") { return *value }
+  var current = Docgen.Fields(*root)
+  for part in reference.drop(2).split("/") {
+    current = match current {
+      case Docgen.Fields(held) => Option.unwrapOr(Meta.get(&held, part.replace("~1", "/").replace("~0", "~")), Docgen.Nothing)
+      case _ => Docgen.Nothing
+    }
+  }
+  current
+}
+
+/// Parameters declared on an object, following local references.
+fn parameters(root: &Array[(Str, Docgen.Meta)], owner: &Array[(Str, Docgen.Meta)]) -> Array[Parameter] {
+  var result: Array[Parameter] = []
+  match Meta.get(owner, "parameters") {
+    case Some(Docgen.Items(listed)) => {
+      for held in listed {
+        match dereferenced(root, &held) {
+          case Docgen.Fields(fields) => {
+            let schemaValue = Option.unwrapOr(Meta.get(&fields, "schema"), Docgen.Fields(fields))
+            let location = Meta.textOr(&fields, "in", "")
+            result = result.push(Parameter{name: Meta.textOr(&fields, "name", ""), location: location, required: Meta.flag(&fields, "required") || location == "path", kind: describe(&schemaValue), description: Meta.textOr(&fields, "description", "")})
+          }
+          case _ => {}
+        }
+      }
+    }
+    case _ => {}
+  }
+  result
+}
+
+/// Payloads of a `content` map, or of a Swagger `schema`.
+fn payloads(fields: &Array[(Str, Docgen.Meta)]) -> Array[Payload] {
+  var result: Array[Payload] = []
+  for (media, held) in Meta.fieldsOf(fields, "content") {
+    let kind = match held {
+      case Docgen.Fields(inner) => describe(&Option.unwrapOr(Meta.get(&inner, "schema"), Docgen.Nothing))
+      case _ => "any"
+    }
+    result = result.push(Payload{media: media, kind: kind})
+  }
+  match Meta.get(fields, "schema") {
+    case Some(held) => { result = result.push(Payload{media: "application/json", kind: describe(&held)}) }
+    case None => {}
+  }
+  result
+}
+
+/// One operation; path-level parameters apply unless the operation redeclares them.
+fn operation(root: &Array[(Str, Docgen.Meta)], path: Str, method: Str, fields: &Array[(Str, Docgen.Meta)], shared: &Array[Parameter]) -> Operation {
+  let own = parameters(root, fields)
+  let inherited = shared.filter(|held: Parameter| own.filter(|mine: Parameter| mine.name == held.name && mine.location == held.location).isEmpty())
+  let all = inherited.concat(own)
+  let bodyParameters = all.filter(|held: Parameter| held.location == "body")
+  var body: Array[Payload] = bodyParameters.map(|held: Parameter| Payload{media: "application/json", kind: held.kind})
+  var bodyRequired = bodyParameters.filter(|held: Parameter| held.required).length() > 0
+  match Meta.get(fields, "requestBody") {
+    case Some(held) => {
+      match dereferenced(root, &held) {
+        case Docgen.Fields(inner) => {
+          body = body.concat(payloads(&inner))
+          bodyRequired = bodyRequired || Meta.flag(&inner, "required")
+        }
+        case _ => {}
+      }
+    }
+    case None => {}
+  }
+  var responses: Array[Response] = []
+  for (status, held) in Meta.fieldsOf(fields, "responses") {
+    match dereferenced(root, &held) {
+      case Docgen.Fields(inner) => { responses = responses.push(Response{status: status, description: Meta.textOr(&inner, "description", ""), payloads: payloads(&inner)}) }
+      case _ => {}
+    }
+  }
+  let tags = match Meta.get(fields, "tags") {
+    case Some(Docgen.Items(listed)) => listed.map(|tag: Docgen.Meta| match tag { case Docgen.Text(written) => written case _ => "" }).filter(|tag: Str| !tag.isEmpty())
+    case _ => []
+  }
+  let id = Meta.textOr(fields, "operationId", method + " " + path)
+  Operation{id: id, method: method.toUpper(), path: path, summary: Meta.textOr(fields, "summary", ""), description: Meta.textOr(fields, "description", ""), tags: tags, parameters: all.filter(|held: Parameter| held.location != "body"), body: body, bodyRequired: bodyRequired, responses: responses, deprecated: Meta.flag(fields, "deprecated")}
+}
+
+/// A named schema with its properties, required names, and enumerated values.
+fn schema(name: Str, value: &Docgen.Meta) -> Schema {
+  let fields = match value {
+    case Docgen.Fields(found) => found
+    case _ => []
+  }
+  let required = match Meta.get(&fields, "required") {
+    case Some(Docgen.Items(listed)) => listed.map(|held: Docgen.Meta| match held { case Docgen.Text(written) => written case _ => "" })
+    case _ => []
+  }
+  var properties: Array[Property] = []
+  for (key, held) in Meta.fieldsOf(&fields, "properties") {
+    let description = match held {
+      case Docgen.Fields(inner) => Meta.textOr(&inner, "description", "")
+      case _ => ""
+    }
+    properties = properties.push(Property{name: key, kind: describe(&held), required: required.contains(key), description: description})
+  }
+  let values = match Meta.get(&fields, "enum") {
+    case Some(Docgen.Items(listed)) => listed.map(fn(held: Docgen.Meta) -> Str {
+        match held {
+          case Docgen.Text(written) => written
+          case Docgen.Whole(count) => show(count)
+          case Docgen.Flag(flag) => if flag { "true" } else { "false" }
+          case _ => "null"
+        }
+      })
+    case _ => []
+  }
+  Schema{name: name, kind: describe(value), description: Meta.textOr(&fields, "description", ""), properties: properties, values: values}
+}

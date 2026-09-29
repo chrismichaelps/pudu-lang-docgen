@@ -7,3 +7,5 @@ _site/
 .cache/
 *.bundle
 .DS_Store
+.docgen/
+examples/site/_site/

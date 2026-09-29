@@ -1,0 +1,80 @@
+/** @Docgen.Markdown.Languages.Files — exact file names such as `Dockerfile` mapped to language identities */
+module PuduLangDocgen.Markdown.Languages.Files
+
+import Std.Map as Map
+
+/// Part 1 of the table.
+const PART_1: Map[Str, Str] = mapOf([
+    (".JUSTFILE", "just"), (".Justfile", "just"), (".Rapp.history", "r"), (".Rhistory", "r"), (".Rprofile", "r"), (".XCompose", "xcompose"), (".abbrev_defs", "emacs-lisp"),
+    (".ackrc", "option-list"), (".agignore", "ignore-list"), (".all-contributorsrc", "json"), (".arcconfig", "json"), (".atomignore", "ignore-list"), (".auto-changelog", "json"), (".babelignore", "ignore-list"),
+    (".babelrc", "json-with-comments"), (".bash_aliases", "shell"), (".bash_functions", "shell"), (".bash_history", "shell"), (".bash_logout", "shell"), (".bash_profile", "shell"), (".bashrc", "shell"),
+    (".browserslistrc", "browserslist"), (".buckconfig", "ini"), (".bzrignore", "ignore-list"), (".c8rc", "json"), (".ckignore", "ignore-list"), (".clang-format", "yaml"), (".clang-tidy", "yaml"),
+    (".clangd", "yaml"), (".classpath", "xml"), (".coffeelintignore", "ignore-list"), (".coveragerc", "ini"), (".cproject", "xml"), (".cshrc", "shell"), (".curlrc", "curl-config"),
+    (".cvsignore", "ignore-list"), (".devcontainer.json", "json-with-comments"), (".dir_colors", "dircolors"), (".dircolors", "dircolors"), (".dockerignore", "ignore-list"), (".easignore", "ignore-list"), (".editorconfig", "editorconfig"),
+    (".eleventyignore", "ignore-list"), (".emacs", "emacs-lisp"), (".emacs.desktop", "emacs-lisp"), (".env", "dotenv"), (".env.ci", "dotenv"), (".env.dev", "dotenv"), (".env.development", "dotenv"),
+    (".env.development.local", "dotenv"), (".env.example", "dotenv"), (".env.local", "dotenv"), (".env.prod", "dotenv"), (".env.production", "dotenv"), (".env.sample", "dotenv"), (".env.staging", "dotenv"),
+    (".env.template", "dotenv"), (".env.test", "dotenv"), (".env.testing", "dotenv"), (".envrc", "shell"), (".eslint-ignore", "ignore-list"), (".eslintignore", "ignore-list"), (".eslintrc", "json-with-comments"),
+    (".eslintrc.json", "json-with-comments"), (".exrc", "vim-script"), (".factor-boot-rc", "factor"), (".factor-rc", "factor"), (".flake8", "ini"), (".flaskenv", "shell"), (".gclient", "python"),
+    (".gemrc", "yaml"), (".git-blame-ignore-revs", "git-revision-list"), (".gitattributes", "git-attributes"), (".gitconfig", "git-config"), (".gitignore", "ignore-list"), (".gitmessage", "git-commit"), (".gitmodules", "git-config"),
+    (".gitreview", "ini"), (".gn", "gn"), (".gnus", "emacs-lisp"), (".gvimrc", "vim-script"), (".htaccess", "apacheconf"), (".htmlhintrc", "json"), (".ignore", "ignore-list"),
+    (".imgbotconfig", "json"), (".inputrc", "readline-config"), (".irbrc", "ruby"), (".jscsrc", "json-with-comments"), (".jshintrc", "json-with-comments"), (".jslintrc", "json-with-comments"), (".justfile", "just"),
+    (".kshrc", "shell"), (".latexmkrc", "perl"), (".login", "shell"), (".luacheckrc", "lua"), (".markdownlintignore", "ignore-list"), (".nanorc", "nanorc"), (".nodemonignore", "ignore-list"),
+    (".npmignore", "ignore-list"), (".npmrc", "npm-config"), (".nvimrc", "vim-script"), (".nycrc", "json"), (".oxlintrc.json", "json-with-comments"), (".php", "php"), (".php_cs", "php"),
+    (".php_cs.dist", "php"), (".prettierignore", "ignore-list"), (".profile", "shell"), (".project", "xml"), (".pryrc", "ruby"), (".pylintrc", "ini"), (".releaserc", "json"),
+    (".rgignore", "ignore-list"), (".rspec", "option-list"), (".scalafix.conf", "hocon"), (".scalafmt.conf", "hocon"), (".secrets.baseline", "json"), (".shellcheckrc", "shellcheck-config"), (".simplecov", "ruby"),
+    (".spacemacs", "emacs-lisp"), (".stylelintignore", "ignore-list"), (".swcrc", "json-with-comments"), (".tern-config", "json"), (".tern-project", "json"), (".tgitconfig", "git-config"), (".tm_properties", "textmate-properties"),
+    (".tmux.conf", "shell"), (".vercelignore", "ignore-list"), (".vimrc", "vim-script"), (".viper", "emacs-lisp"), (".vscodeignore", "ignore-list"), (".watchmanconfig", "json"), (".wgetrc", "wget-config"),
+    (".xinitrc", "shell"), (".xsession", "shell"), (".yardopts", "option-list"), (".zlogin", "shell"), (".zlogout", "shell"), (".zprofile", "shell"), (".zshenv", "shell"),
+    (".zshrc", "shell"), ("9fs", "shell"), ("APKBUILD", "alpine-abuild"), ("Android.bp", "soong"), ("App.config", "xml"), ("Appraisals", "ruby"), ("BSDmakefile", "makefile"),
+    ("BUCK", "starlark"), ("BUILD", "starlark"), ("BUILD.bazel", "starlark"), ("Berksfile", "ruby"), ("Brewfile", "ruby"), ("Buildfile", "ruby"), ("CITATION", "text"),
+    ("CITATION.cff", "yaml"), ("CITATIONS", "text"), ("CMakeLists.txt", "cmake"), ("CODEOWNERS", "codeowners"), ("COMMIT_EDITMSG", "git-commit"), ("COPYING", "text"), ("COPYING.regex", "text"),
+    ("COPYRIGHT.regex", "text"), ("Caddyfile", "caddyfile"), ("Cakefile", "coffeescript"), ("Capfile", "ruby"), ("Cargo.lock", "toml"), ("Cargo.toml.orig", "toml"), ("Cask", "emacs-lisp"),
+    ("Containerfile", "dockerfile"), ("DEPS", "python"), ("DIR_COLORS", "dircolors"), ("Dangerfile", "ruby"), ("Deliverfile", "ruby"), ("Dockerfile", "dockerfile"), ("Earthfile", "earthly"),
+    ("Eask", "emacs-lisp"), ("Emakefile", "erlang"), ("FONTLOG", "text"), ("Fakefile", "fancy"), ("Fastfile", "ruby"), ("GNUmakefile", "makefile"), ("Gemfile", "ruby"),
+    ("Gemfile.lock", "gemfile.lock"), ("Gopkg.lock", "toml"), ("Guardfile", "ruby"), ("HOSTS", "hosts-file"), ("INSTALL", "text"), ("INSTALL.mysql", "text"), ("JUSTFILE", "just"),
+    ("Jakefile", "javascript"), ("Jarfile", "ruby"), ("Jenkinsfile", "groovy"), ("Justfile", "just"), ("Kbuild", "makefile"), ("LICENSE", "text"), ("LICENSE.mysql", "text"),
+    ("Lexer.x", "lex"), ("MANIFEST.MF", "jar-manifest"), ("MD5SUMS", "checksums"), ("MODULE.bazel", "starlark"), ("MODULE.bazel.lock", "json"), ("Makefile", "makefile"), ("Makefile.PL", "perl"),
+    ("Makefile.am", "makefile"), ("Makefile.boot", "makefile"), ("Makefile.frag", "makefile"), ("Makefile.in", "makefile"), ("Makefile.inc", "makefile"), ("Makefile.pc", "makefile"), ("Makefile.wat", "makefile"),
+    ("Mavenfile", "ruby"), ("Modulefile", "puppet"), ("NEWS", "text"), ("Notebook", "jupyter-notebook"), ("NuGet.config", "xml"), ("Nukefile", "nu"), ("PKGBUILD", "shell"),
+    ("Package.resolved", "json"), ("Phakefile", "php"), ("Pipfile", "toml"), ("Pipfile.lock", "json"), ("Podfile", "ruby"), ("Procfile", "procfile"), ("Project.ede", "emacs-lisp"),
+    ("Puppetfile", "ruby"), ("README.me", "text"), ("README.mysql", "text"), ("README.nss", "text"), ("README.pc", "text"), ("ROOT", "isabelle-root"), ("Rakefile", "ruby"),
+    ("Rexfile", "perl"), ("SConscript", "python"), ("SConstruct", "python"), ("SHA1SUMS", "checksums"), ("SHA256SUMS", "checksums"), ("SHA256SUMS.txt", "checksums"), ("SHA512SUMS", "checksums"),
+    ("Settings.StyleCop", "xml"), ("Singularity", "singularity"), ("Slakefile", "livescript"), ("Snakefile", "snakemake"), ("Snapfile", "ruby"), ("Steepfile", "ruby"), ("Thorfile", "ruby"),
+    ("Tiltfile", "starlark"), ("Vagrantfile", "ruby"), ("WORKSPACE", "starlark"), ("WORKSPACE.bazel", "starlark"), ("WORKSPACE.bzlmod", "starlark"), ("Web.Debug.config", "xml"), ("Web.Release.config", "xml"),
+    ("Web.config", "xml"), ("XCompose", "xcompose"), ("_curlrc", "curl-config"), ("_dir_colors", "dircolors"), ("_dircolors", "dircolors"), ("_emacs", "emacs-lisp"), ("_helpers.tpl", "go-template"),
+    ("_redirects", "redirect-rules"), ("_vimrc", "vim-script"), ("abbrev_defs", "emacs-lisp"), ("ack", "perl"), ("ackrc", "option-list"), ("ant.xml", "ant-build-system"), ("apache2.conf", "apacheconf"),
+    ("api-extractor.json", "json-with-comments"), ("bash_aliases", "shell"), ("bash_logout", "shell"), ("bash_profile", "shell"), ("bashrc", "shell"), ("bird.conf", "bird2"), ("browserslist", "browserslist"),
+    ("build.xml", "ant-build-system"), ("buildfile", "ruby"), ("buildozer.spec", "ini"), ("bun.lock", "json"), ("cabal.config", "cabal-config"), ("cabal.project", "cabal-config"), ("checksums.txt", "checksums"),
+    ("cksums", "checksums"), ("click.me", "text"), ("composer.lock", "json"), ("config.worktree", "git-config"), ("configure.ac", "m4sugar"), ("contents.lr", "markdown"), ("cpanfile", "perl"),
+    ("crontab", "crontab"), ("cshrc", "shell"), ("delete.me", "text"), ("deno.lock", "json"), ("descrip.mmk", "module-management-system"), ("descrip.mms", "module-management-system"), ("dev-requirements.txt", "pip-requirements"),
+    ("devcontainer.json", "json-with-comments"), ("dir_colors", "dircolors"), ("dune-project", "dune"), ("encodings.dir", "x-font-directory-index"), ("eqnrc", "roff"), ("expr-dist", "r")
+  ])
+
+/// Part 2 of the table.
+const PART_2: Map[Str, Str] = mapOf([
+    ("file_contexts", "selinux-policy"), ("firestore.rules", "cloud-firestore-security-rules"), ("flake.lock", "json"), ("fonts.alias", "x-font-directory-index"), ("fonts.dir", "x-font-directory-index"), ("fonts.scale", "x-font-directory-index"), ("fp-lib-table", "kicad-layout"),
+    ("genfs_contexts", "selinux-policy"), ("gitignore-global", "ignore-list"), ("gitignore_global", "ignore-list"), ("glide.lock", "yaml"), ("go.mod", "go-module"), ("go.sum", "go-checksums"), ("go.work", "go-workspace"),
+    ("go.work.sum", "go-checksums"), ("gradlew", "shell"), ("gradlew.bat", "batchfile"), ("gtkrc", "gtkrc"), ("gtkrc-2.0", "gtkrc"), ("gvimrc", "vim-script"), ("haproxy.cfg", "haproxy"),
+    ("hosts", "hosts-file"), ("hosts.txt", "hosts-file"), ("httpd.conf", "apacheconf"), ("initial_sids", "selinux-policy"), ("inputrc", "readline-config"), ("installscript.qs", "qt-script"), ("jsconfig.json", "json-with-comments"),
+    ("justfile", "just"), ("kakrc", "kakounescript"), ("kcl.mod", "kcl"), ("kcl.mod.lock", "kcl"), ("keep.me", "text"), ("kshrc", "shell"), ("language-configuration.json", "json-with-comments"),
+    ("language-subtag-registry.txt", "record-jar"), ("latexmkrc", "perl"), ("ld.script", "linker-script"), ("lexer.x", "lex"), ("login", "shell"), ("m3makefile", "quake"), ("m3overrides", "quake"),
+    ("makefile", "makefile"), ("makefile.sco", "makefile"), ("man", "shell"), ("mcmod.info", "json"), ("md5sum.txt", "checksums"), ("meson.build", "meson"), ("meson_options.txt", "meson"),
+    ("mise.local.lock", "toml"), ("mise.lock", "toml"), ("mix.lock", "elixir"), ("mkfile", "makefile"), ("mmn", "roff"), ("mmt", "roff"), ("mocha.opts", "option-list"),
+    ("moon.mod", "moonbit"), ("moon.pkg", "moonbit"), ("mvnw", "shell"), ("mvnw.cmd", "batchfile"), ("nanorc", "nanorc"), ("nextflow.config", "nextflow"), ("nginx.conf", "nginx"),
+    ("nim.cfg", "nim"), ("nvimrc", "vim-script"), ("owh", "tcl"), ("package.mask", "text"), ("package.use.mask", "text"), ("package.use.stable.mask", "text"), ("packages.config", "xml"),
+    ("pdm.lock", "toml"), ("pixi.lock", "yaml"), ("poetry.lock", "toml"), ("pom.xml", "maven-pom"), ("port_contexts", "selinux-policy"), ("profile", "shell"), ("project.godot", "godot-resource"),
+    ("pylintrc", "ini"), ("read.me", "text"), ("readme.1st", "text"), ("rebar.config", "erlang"), ("rebar.config.lock", "erlang"), ("rebar.lock", "erlang"), ("requirements-dev.txt", "pip-requirements"),
+    ("requirements.lock.txt", "pip-requirements"), ("requirements.txt", "pip-requirements"), ("riemann.config", "clojure"), ("robots.txt", "robots-exclusion-rules"), ("security_classes", "selinux-policy"), ("ssh-config", "ssh-config"), ("ssh_config", "ssh-config"),
+    ("sshconfig", "ssh-config"), ("sshconfig.snip", "ssh-config"), ("sshd-config", "ssh-config"), ("sshd_config", "ssh-config"), ("starfield", "tcl"), ("suite.rc", "cylc"), ("test.me", "text"),
+    ("tmux.conf", "shell"), ("toolchain_installscript.qs", "qt-script"), ("torrc", "tor-config"), ("troffrc", "roff"), ("troffrc-end", "roff"), ("tsconfig.json", "json-with-comments"), ("tslint.json", "json-with-comments"),
+    ("use.mask", "text"), ("use.stable.mask", "text"), ("uv.lock", "toml"), ("vimrc", "vim-script"), ("vlcrc", "ini"), ("wscript", "python"), ("xcompose", "xcompose"),
+    ("xinitrc", "shell"), ("xmake.lua", "xmake"), ("xsession", "shell"), ("yarn.lock", "yaml"), ("zlogin", "shell"), ("zlogout", "shell"), ("zprofile", "shell"),
+    ("zshenv", "shell"), ("zshrc", "shell")
+  ])
+
+/// The value stored for a key.
+export fn lookup(key: Str) -> Option[Str] {
+  if Map.containsKey(&PART_1, key) { return Map.get(&PART_1, key) }
+  if Map.containsKey(&PART_2, key) { return Map.get(&PART_2, key) }
+  None
+}

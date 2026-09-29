@@ -1,0 +1,478 @@
+/** @Docgen.Inline.Module — phrasing syntax parsed into article inline nodes */
+module PuduLangDocgen.Inline
+
+import Std.Char as Char
+import Std.Map as Map
+import PuduLangDocgen.Markdown.Crossref as Crossref
+import PuduLangDocgen.Markdown.Lexicon as Lexicon
+import PuduLangDocgen.Markdown.Syntax as Syntax
+
+/// ASCII punctuation, which may be escaped and which decides delimiter flanking.
+const PUNCTUATION: Str = "!\"#$%&'()*+,-./:;<=>?@[\\]^_`\{|\}~"
+
+/** @Docgen.Inline.Scan — characters of one block with line offsets and link definitions */
+type Scan = { cs: Array[Char], breaks: Array[Int], definitions: Map[Str, Syntax.Target], line: Int }
+
+/// Phrasing content of a block whose text starts at the given one-based line.
+export fn parse(text: Str, definitions: &Map[Str, Syntax.Target], line: Int) -> Array[Syntax.Inline] {
+  let cs = text.chars()
+  var breaks: Array[Int] = []
+  var count = 0
+  for character in cs {
+    breaks = breaks.push(count)
+    if character == '\n' { count = count + 1 }
+  }
+  let scan = Scan{cs: cs, breaks: breaks.push(count), definitions: *definitions, line: line}
+  span(&scan, 0, cs.length(), 0)
+}
+
+/// A reference label compared case-insensitively with collapsed white space.
+export fn label(text: Str) -> Str {
+  text.trim().toLower().split("\n").join(" ").split("\t").join(" ").split(" ").filter(|part: Str| !part.isEmpty()).join(" ")
+}
+
+/// The text a reader sees, without markup.
+export fn plain(inlines: &Array[Syntax.Inline]) -> Str {
+  var pieces: Array[Str] = []
+  for node in *inlines {
+    let piece = match node {
+      case Syntax.Text(written) => written
+      case Syntax.Code(written) => written
+      case Syntax.Emphasis(children) => plain(&children)
+      case Syntax.Strong(children) => plain(&children)
+      case Syntax.Strike(children) => plain(&children)
+      case Syntax.Subscript(children) => plain(&children)
+      case Syntax.Superscript(children) => plain(&children)
+      case Syntax.Inserted(children) => plain(&children)
+      case Syntax.Marked(children) => plain(&children)
+      case Syntax.Note(_label) => ""
+      case Syntax.Anchor(_target, children) => plain(&children)
+      case Syntax.Picture(_target, alt) => alt
+      case Syntax.Xref(reference) => if reference.text.isEmpty() { reference.uid } else { plain(&reference.text) }
+      case Syntax.Math(written) => written
+      case Syntax.Markup(_written) => ""
+      case Syntax.LineBreak => " "
+      case Syntax.SoftBreak => " "
+      case Syntax.Fragment(_path, children) => plain(&children)
+    }
+    pieces = pieces.push(piece)
+  }
+  pieces.join("")
+}
+
+/// The character at an index, or a space outside the text.
+fn at(scan: &Scan, index: Int) -> Char {
+  if index < 0 || index >= scan.cs.length() { ' ' } else { scan.cs[index] }
+}
+
+/// Text of the characters in a half-open range.
+fn slice(scan: &Scan, from: Int, to: Int) -> Str { Lexicon.slice(&scan.cs, from, to) }
+
+/// The one-based source line of a character.
+fn lineAt(scan: &Scan, index: Int) -> Int { scan.line + scan.breaks[index] }
+
+/// Whether a character counts as white space for flanking; text edges do.
+fn blank(character: Char) -> Bool { Lexicon.blank(character) }
+
+/// Whether a character is ASCII punctuation.
+fn punctuation(character: Char) -> Bool { PUNCTUATION.contains(character.toText()) }
+
+/// Whether a character belongs to a word; non-ASCII letters do.
+fn word(character: Char) -> Bool { Char.isAlphanumeric(character) || character.code() > 127 }
+
+/// Pending literal text appended as one node.
+fn flushed(nodes: Array[Syntax.Inline], pending: &Array[Str]) -> Array[Syntax.Inline] {
+  if pending.isEmpty() { nodes } else { nodes.push(Syntax.Text(pending.join(""))) }
+}
+
+/// Inline nodes of a range, bounded to 32 nested spans.
+fn span(scan: &Scan, from: Int, to: Int, depth: Int) -> Array[Syntax.Inline] {
+  var nodes: Array[Syntax.Inline] = []
+  var pending: Array[Str] = []
+  var index = from
+  while index < to {
+    let character = scan.cs[index]
+    let found = if depth > 32 { None } else { construct(scan, index, to, depth) }
+    match found {
+      case Some((made, next)) => {
+        nodes = flushed(nodes, &pending)
+        pending = []
+        nodes = nodes.concat(made)
+        index = next
+      }
+      case None => {
+        if character == '\\' && index + 1 < to && punctuation(scan.cs[index + 1]) {
+          pending = pending.push(scan.cs[index + 1].toText())
+          index = index + 2
+        } else if character == '\\' && index + 1 < to && scan.cs[index + 1] == '\n' {
+          nodes = flushed(nodes, &pending).push(Syntax.LineBreak)
+          pending = []
+          index = index + 2
+        } else if character == '\n' {
+          var trailing = 0
+          while pending.length() > trailing && pending[pending.length() - 1 - trailing] == " " { trailing = trailing + 1 }
+          pending = pending.slice(0, pending.length() - trailing)
+          nodes = flushed(nodes, &pending).push(if trailing >= 2 { Syntax.LineBreak } else { Syntax.SoftBreak })
+          pending = []
+          index = index + 1
+          while index < to && (scan.cs[index] == ' ' || scan.cs[index] == '\t') { index = index + 1 }
+        } else if character == '*' || character == '_' || character == '~' || character == '`' {
+          let run = runLength(scan, index, to, character)
+          pending = pending.push(slice(scan, index, index + run))
+          index = index + run
+        } else {
+          pending = pending.push(character.toText())
+          index = index + 1
+        }
+      }
+    }
+  }
+  flushed(nodes, &pending)
+}
+
+/// The construct starting at an index, as nodes and the index after it.
+fn construct(scan: &Scan, index: Int, to: Int, depth: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  let character = scan.cs[index]
+  if character == '`' { return code(scan, index, to) }
+  if character == '*' || character == '_' || character == '~' { return emphasis(scan, index, to, depth) }
+  if character == '^' { return paired(scan, index, to, depth, 1) }
+  if character == '+' || character == '=' { return paired(scan, index, to, depth, 2) }
+  if character == '[' { return bracket(scan, index, to, depth) }
+  if character == '!' && at(scan, index + 1) == '[' { return image(scan, index, to) }
+  if character == '<' { return angle(scan, index, to) }
+  if character == '@' { return mention(scan, index, to) }
+  if character == '&' { return entity(scan, index, to) }
+  if character == ':' { return emoji(scan, index, to) }
+  if character == '$' { return math(scan, index, to) }
+  if character == 'h' || character == 'w' { return bare(scan, index, to) }
+  None
+}
+
+/// How many times a character repeats from an index.
+fn runLength(scan: &Scan, index: Int, to: Int, character: Char) -> Int {
+  var end = index
+  while end < to && scan.cs[end] == character { end = end + 1 }
+  end - index
+}
+
+/// A code span closed by a backtick run of the same length.
+fn code(scan: &Scan, index: Int, to: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  let run = runLength(scan, index, to, '`')
+  let close = codeEnd(scan, index, to)
+  if close < 0 { return None }
+  var content = slice(scan, index + run, close).replace("\n", " ")
+  if content.length() >= 2 && content.startsWith(" ") && content.endsWith(" ") && !content.trim().isEmpty() {
+    content = content.drop(1).take(content.length() - 2)
+  }
+  Some(([Syntax.Code(content)], close + run))
+}
+
+/// The start of the backtick run closing the code span at an index, or -1.
+fn codeEnd(scan: &Scan, index: Int, to: Int) -> Int {
+  let run = runLength(scan, index, to, '`')
+  var cursor = index + run
+  while cursor < to {
+    if scan.cs[cursor] == '`' {
+      let found = runLength(scan, cursor, to, '`')
+      if found == run { return cursor }
+      cursor = cursor + found
+    } else { cursor = cursor + 1 }
+  }
+  -1
+}
+
+/// Whether a delimiter run may open emphasis.
+fn opens(scan: &Scan, index: Int, run: Int, to: Int) -> Bool {
+  let before = at(scan, index - 1)
+  let after = if index + run >= to { ' ' } else { scan.cs[index + run] }
+  let left = !blank(after) && (!punctuation(after) || blank(before) || punctuation(before))
+  if scan.cs[index] == '_' { left && !word(before) } else { left }
+}
+
+/// Whether a delimiter run may close emphasis.
+fn closes(scan: &Scan, index: Int, run: Int, to: Int) -> Bool {
+  let before = at(scan, index - 1)
+  let after = if index + run >= to { ' ' } else { scan.cs[index + run] }
+  let right = !blank(before) && (!punctuation(before) || blank(after) || punctuation(after))
+  if scan.cs[index] == '_' { right && !word(after) } else { right }
+}
+
+/// The start of the run closing an opener of the given length, skipping nested spans, or -1.
+fn closing(scan: &Scan, from: Int, to: Int, delimiter: Char, wanted: Int, depth: Int) -> Int {
+  var cursor = from
+  while cursor < to {
+    let character = scan.cs[cursor]
+    if character == '\\' {
+      cursor = cursor + 2
+    } else if character == '`' {
+      let end = codeEnd(scan, cursor, to)
+      cursor = if end < 0 { cursor + runLength(scan, cursor, to, '`') } else { end + runLength(scan, cursor, to, '`') }
+    } else if character == '*' || character == '_' || character == '~' {
+      let run = runLength(scan, cursor, to, character)
+      let canClose = closes(scan, cursor, run, to)
+      let canOpen = opens(scan, cursor, run, to)
+      if character == delimiter && canClose && (!canOpen || run == wanted) { return cursor }
+      if canOpen && depth < 32 {
+        let nested = closing(scan, cursor + run, to, character, run, depth + 1)
+        cursor = if nested < 0 { cursor + run } else { nested + runLength(scan, nested, to, character) }
+      } else { cursor = cursor + run }
+    } else { cursor = cursor + 1 }
+  }
+  -1
+}
+
+/// Emphasis, strong emphasis, or strikethrough between matching delimiter runs.
+fn emphasis(scan: &Scan, index: Int, to: Int, depth: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  let delimiter = scan.cs[index]
+  let run = runLength(scan, index, to, delimiter)
+  if delimiter == '~' && run > 2 { return None }
+  if !opens(scan, index, run, to) { return None }
+  let close = closing(scan, index + run, to, delimiter, run, 0)
+  if close < 0 { return None }
+  let closingRun = runLength(scan, close, to, delimiter)
+  var used = if run < closingRun { run } else { closingRun }
+  if used > 3 { used = 3 }
+  if delimiter == '~' && closingRun != run { return None }
+  let start = index + run
+  let inner = span(scan, start, close, depth + 1)
+  let node = if delimiter == '~' && used == 1 { Syntax.Subscript(inner) }
+    else if delimiter == '~' { Syntax.Strike(inner) }
+    else if used == 1 { Syntax.Emphasis(inner) }
+    else if used == 2 { Syntax.Strong(inner) }
+    else { Syntax.Emphasis([Syntax.Strong(inner)]) }
+  let extra = run - used
+  let lead: Array[Syntax.Inline] = if extra > 0 { [Syntax.Text(slice(scan, index, index + extra))] } else { [] }
+  Some((lead.push(node), close + used))
+}
+
+/// Superscript `^x^`, inserted `++x++`, or marked `==x==` text: an exact delimiter run
+/// hugging its content on both sides.
+fn paired(scan: &Scan, index: Int, to: Int, depth: Int, length: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  let delimiter = scan.cs[index]
+  if runLength(scan, index, to, delimiter) != length || index + length >= to || blank(scan.cs[index + length]) { return None }
+  var cursor = index + length
+  while cursor < to {
+    if scan.cs[cursor] == '\\' {
+      cursor = cursor + 2
+      continue
+    }
+    if scan.cs[cursor] == delimiter {
+      let run = runLength(scan, cursor, to, delimiter)
+      if run == length && !blank(scan.cs[cursor - 1]) {
+        let inner = span(scan, index + length, cursor, depth + 1)
+        let node = if delimiter == '^' { Syntax.Superscript(inner) } else if delimiter == '+' { Syntax.Inserted(inner) } else { Syntax.Marked(inner) }
+        return Some(([node], cursor + length))
+      }
+      cursor = cursor + run
+    } else { cursor = cursor + 1 }
+  }
+  None
+}
+
+/// The index of the bracket closing the one at an index, or -1.
+fn bracketEnd(scan: &Scan, index: Int, to: Int) -> Int {
+  var level = 0
+  var cursor = index
+  while cursor < to {
+    let character = scan.cs[cursor]
+    if character == '\\' { cursor = cursor + 2
+      continue }
+    if character == '`' {
+      let end = codeEnd(scan, cursor, to)
+      if end >= 0 {
+        cursor = end + runLength(scan, cursor, to, '`')
+        continue
+      }
+    }
+    if character == '[' { level = level + 1 }
+    if character == ']' {
+      level = level - 1
+      if level == 0 { return cursor }
+    }
+    cursor = cursor + 1
+  }
+  -1
+}
+
+/// A parenthesized destination with an optional quoted title, and the index after it.
+fn destination(scan: &Scan, index: Int, to: Int) -> Option[(Syntax.Target, Int)] {
+  if at(scan, index) != '(' || index >= to { return None }
+  var cursor = index + 1
+  while cursor < to && blank(scan.cs[cursor]) { cursor = cursor + 1 }
+  let begin = cursor
+  var written = ""
+  if at(scan, cursor) == '<' {
+    cursor = cursor + 1
+    while cursor < to && scan.cs[cursor] != '>' && scan.cs[cursor] != '\n' { cursor = cursor + 1 }
+    if cursor >= to || scan.cs[cursor] != '>' { return None }
+    written = slice(scan, begin + 1, cursor)
+    cursor = cursor + 1
+  } else {
+    var level = 0
+    while cursor < to && !blank(scan.cs[cursor]) {
+      let character = scan.cs[cursor]
+      if character == '\\' && cursor + 1 < to { cursor = cursor + 1 }
+        else if character == '(' { level = level + 1 }
+        else if character == ')' {
+        if level == 0 { break }
+        level = level - 1
+      }
+      cursor = cursor + 1
+    }
+    written = slice(scan, begin, cursor)
+  }
+  while cursor < to && blank(scan.cs[cursor]) { cursor = cursor + 1 }
+  var title = ""
+  let opener = at(scan, cursor)
+  if cursor < to && (opener == '"' || opener == '\'' || opener == '(') {
+    let closer = if opener == '(' { ')' } else { opener }
+    let titleStart = cursor + 1
+    cursor = titleStart
+    while cursor < to && scan.cs[cursor] != closer { cursor = cursor + 1 }
+    if cursor >= to { return None }
+    title = slice(scan, titleStart, cursor)
+    cursor = cursor + 1
+    while cursor < to && blank(scan.cs[cursor]) { cursor = cursor + 1 }
+  }
+  if cursor >= to || scan.cs[cursor] != ')' { return None }
+  Some((Syntax.Target{destination: written, title: title, line: lineAt(scan, index)}, cursor + 1))
+}
+
+/// A reference target after link text: `[label]`, `[]`, or the text itself as a label.
+fn referenced(scan: &Scan, text: Str, after: Int, to: Int) -> Option[(Syntax.Target, Int)] {
+  if at(scan, after) == '[' && after < to {
+    let close = bracketEnd(scan, after, to)
+    if close < 0 { return None }
+    let written = slice(scan, after + 1, close)
+    let key = if written.trim().isEmpty() { label(text) } else { label(written) }
+    let found = Map.get(&scan.definitions, key) ?
+    return Some((found, close + 1))
+  }
+  let found = Map.get(&scan.definitions, label(text)) ?
+  Some((found, after))
+}
+
+/// A link, a cross-reference link, or an inline include opened by a bracket.
+fn bracket(scan: &Scan, index: Int, to: Int, depth: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  if at(scan, index + 1) == '!' && slice(scan, index + 2, if index + 9 <= to { index + 9 } else { to }).toLower() == "include" {
+    return include(scan, index, to)
+  }
+  let close = bracketEnd(scan, index, to)
+  if close < 0 { return None }
+  let text = slice(scan, index + 1, close)
+  if text.startsWith("^") && text.length() > 1 && !text.contains(" ") && at(scan, close + 1) != '(' && at(scan, close + 1) != ':' {
+    return Some(([Syntax.Note(text.drop(1))], close + 1))
+  }
+  let found = match destination(scan, close + 1, to) {
+    case Some(held) => Some(held)
+    case None => referenced(scan, text, close + 1, to)
+  }
+  let (target, next) = found ?
+  let children = span(scan, index + 1, close, depth + 1)
+  if target.destination.startsWith("xref:") {
+    return Some(([Crossref.span(target.destination.drop(5), children, target.line, false)], next))
+  }
+  Some(([Syntax.Anchor(target, children)], next))
+}
+
+/// An inline include `[!INCLUDE[title](path)]`, resolved later against the docset.
+fn include(scan: &Scan, index: Int, to: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  var cursor = index + 9
+  while cursor < to && scan.cs[cursor] == ' ' { cursor = cursor + 1 }
+  if at(scan, cursor) != '[' { return None }
+  let close = bracketEnd(scan, cursor, to)
+  if close < 0 { return None }
+  let (target, next) = destination(scan, close + 1, to) ?
+  if at(scan, next) != ']' || next >= to { return None }
+  Some(([Syntax.Fragment(target.destination, [Syntax.Text(slice(scan, cursor + 1, close))])], next + 1))
+}
+
+/// An image with alternate text taken from its label.
+fn image(scan: &Scan, index: Int, to: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  let close = bracketEnd(scan, index + 1, to)
+  if close < 0 { return None }
+  let text = slice(scan, index + 2, close)
+  let found = match destination(scan, close + 1, to) {
+    case Some(held) => Some(held)
+    case None => referenced(scan, text, close + 1, to)
+  }
+  let (target, next) = found ?
+  let alt = plain(&span(scan, index + 2, close, 1))
+  Some(([Syntax.Picture(target, alt)], next))
+}
+
+/// Autolinks, cross references, comments, and allowed inline HTML opened by `<`.
+fn angle(scan: &Scan, index: Int, to: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  var close = index + 1
+  while close < to && scan.cs[close] != '>' && scan.cs[close] != '<' { close = close + 1 }
+  if at(scan, index + 1) == '!' && slice(scan, index, if index + 4 <= to { index + 4 } else { to }) == "<!--" {
+    var end = index + 4
+    while end + 2 < to && !(scan.cs[end] == '-' && scan.cs[end + 1] == '-' && scan.cs[end + 2] == '>') { end = end + 1 }
+    if end + 2 >= to { return None }
+    return Some(([], end + 3))
+  }
+  if close >= to || scan.cs[close] != '>' { return None }
+  let inner = slice(scan, index + 1, close)
+  let line = lineAt(scan, index)
+  if inner.startsWith("xref:") && !inner.contains(" ") { return Some(([Crossref.span(inner.drop(5), [], line, false)], close + 1)) }
+  if inner.startsWith("xref ") {
+    let found = Crossref.element(inner, line) ?
+    return Some(([found], close + 1))
+  }
+  match Lexicon.autolink(inner) {
+    case Some(target) => { return Some(([Syntax.Anchor(Syntax.Target{destination: target, title: "", line: line}, [Syntax.Text(inner)])], close + 1)) }
+    case None => {}
+  }
+  let markup = Lexicon.tag(inner) ?
+  Some(([Syntax.Markup(markup)], close + 1))
+}
+
+/// The `@uid` shorthand, written after white space or at the start of a block.
+fn mention(scan: &Scan, index: Int, to: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  let before = at(scan, index - 1)
+  if index > 0 && !blank(before) && before != '(' && before != '[' { return None }
+  let line = lineAt(scan, index)
+  let quote = at(scan, index + 1)
+  if index + 1 < to && (quote == '"' || quote == '\'') {
+    var end = index + 2
+    while end < to && scan.cs[end] != quote { end = end + 1 }
+    if end >= to || end == index + 2 { return None }
+    return Some(([Crossref.span(slice(scan, index + 2, end), [], line, true)], end + 1))
+  }
+  if index + 1 >= to || !Char.isLetter(scan.cs[index + 1]) { return None }
+  var end = index + 1
+  while end < to && (word(scan.cs[end]) || ".-_#*()`<>,".contains(scan.cs[end].toText())) { end = end + 1 }
+  while end > index + 1 && ".,;:)>".contains(scan.cs[end - 1].toText()) { end = end - 1 }
+  Some(([Crossref.span(slice(scan, index + 1, end), [], line, true)], end))
+}
+
+/// A named or numeric character reference.
+fn entity(scan: &Scan, index: Int, to: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  let (decoded, next) = Lexicon.entity(&scan.cs, index, to) ?
+  Some(([Syntax.Text(decoded)], next))
+}
+
+/// A known emoji short code.
+fn emoji(scan: &Scan, index: Int, to: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  let (picture, next) = Lexicon.emoji(&scan.cs, index, to) ?
+  Some(([Syntax.Text(picture)], next))
+}
+
+/// Inline math between single dollar signs that hug their content.
+fn math(scan: &Scan, index: Int, to: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  if index + 1 >= to || blank(scan.cs[index + 1]) || scan.cs[index + 1] == '$' { return None }
+  var end = index + 1
+  while end < to && scan.cs[end] != '$' && scan.cs[end] != '\n' {
+    if scan.cs[end] == '\\' { end = end + 1 }
+    end = end + 1
+  }
+  if end >= to || scan.cs[end] != '$' || blank(scan.cs[end - 1]) || Char.isDigit(at(scan, end + 1)) { return None }
+  Some(([Syntax.Math(slice(scan, index + 1, end))], end + 1))
+}
+
+/// A bare web address linked to itself; `www.` addresses use HTTPS.
+fn bare(scan: &Scan, index: Int, to: Int) -> Option[(Array[Syntax.Inline], Int)] {
+  let (written, next) = Lexicon.address(&scan.cs, index, to) ?
+  let target = if written.toLower().startsWith("www.") { "https://" + written } else { written }
+  Some(([Syntax.Anchor(Syntax.Target{destination: target, title: "", line: lineAt(scan, index)}, [Syntax.Text(written)])], next))
+}

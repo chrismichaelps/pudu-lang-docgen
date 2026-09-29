@@ -1,0 +1,442 @@
+/** @Docgen.Markdown.Blocks — recursive block structure with includes and excerpts */
+module PuduLangDocgen.Markdown.Blocks
+
+import Std.Map as Map
+import Std.Option as Option
+import Std.Set as Set
+import Std.Text as Text
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Inline as Inline
+import PuduLangDocgen.Markdown.Directives as Directives
+import PuduLangDocgen.Markdown.FrontMatter as FrontMatter
+import PuduLangDocgen.Markdown.Languages as Languages
+import PuduLangDocgen.Markdown.Layout as Layout
+import PuduLangDocgen.Markdown.Leaves as Leaves
+import PuduLangDocgen.Markdown.Snippet as Snippet
+import PuduLangDocgen.Markdown.Syntax as Syntax
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Markdown.Env — the file being parsed, loaded files, and include trail */
+export type Env = { origin: Str, files: Map[Str, Str], trail: Array[Str], definitions: Map[Str, Syntax.Target], alerts: Set[Str] }
+
+/** @Docgen.Markdown.Parsed — blocks with the diagnostics found while reading them */
+export type Parsed = { blocks: Array[Syntax.Block], diagnostics: Array[Docgen.Diagnostic] }
+
+/// Deepest nesting of containers and includes read before content is kept as text.
+const MAX_DEPTH: Int = 24
+
+/// A parsing environment for a project-relative file with extra alert kinds.
+export fn environment(origin: Str, files: &Map[Str, Str], alerts: &Set[Str]) -> Env {
+  Env{origin: origin, files: *files, trail: [origin], definitions: mapOf([]), alerts: *alerts}
+}
+
+/// Blocks of numbered lines.
+export fn parse(lines: &Array[FrontMatter.Line], env: &Env, depth: Int) -> Parsed {
+  var blocks: Array[Syntax.Block] = []
+  var diagnostics: Array[Docgen.Diagnostic] = []
+  var index = 0
+  while index < lines.length() {
+    if Layout.blank(lines[index].text) {
+      index = index + 1
+      continue
+    }
+    let step = if depth > MAX_DEPTH { deep(lines, index, env) } else { block(lines, index, env, depth) }
+    blocks = blocks.concat(step.blocks)
+    diagnostics = diagnostics.concat(step.diagnostics)
+    index = if step.next > index { step.next } else { index + 1 }
+  }
+  Parsed{blocks: blocks, diagnostics: diagnostics}
+}
+
+/// Inline content of text starting at a line, with inline includes resolved.
+export fn inlines(text: Str, line: Int, env: &Env, depth: Int) -> (Array[Syntax.Inline], Array[Docgen.Diagnostic]) {
+  resolved(Inline.parse(text, &env.definitions, line), line, env, depth)
+}
+
+/// Remaining lines kept as one paragraph once nesting is too deep.
+fn deep(lines: &Array[FrontMatter.Line], index: Int, env: &Env) -> Leaves.Step {
+  let text = lines.slice(index, lines.length()).map(|line: FrontMatter.Line| line.text).join("\n")
+  let problem = Docgen.warning(Codes.NESTING_TOO_DEEP, env.origin, lines[index].number, "content nests deeper than " + show(MAX_DEPTH) + " levels and is shown as text")
+  Leaves.Step{blocks: [Syntax.Paragraph([Syntax.Text(text)])], next: lines.length(), diagnostics: [problem]}
+}
+
+/// The block starting at a nonblank line.
+fn block(lines: &Array[FrontMatter.Line], index: Int, env: &Env, depth: Int) -> Leaves.Step {
+  let line = lines[index]
+  let text = line.text
+  match Layout.fence(text) {
+    case Some(opened) => { return Leaves.fenced(lines, index, &opened, env.origin) }
+    case None => {}
+  }
+  if Layout.indent(text) >= 4 { return Leaves.indented(lines, index) }
+  if text.trim().startsWith("$$") { return Leaves.mathBlock(lines, index, env.origin) }
+  match Directives.colon(text) {
+    case Some(found) => { return directive(lines, index, &found, env, depth) }
+    case None => {}
+  }
+  match Directives.include(text) {
+    case Some((_title, written)) => { return included(written, line.number, index + 1, env, depth) }
+    case None => {}
+  }
+  match Directives.excerpt(text) {
+    case Some(found) => { return excerpt(found.destination, found.language, found.title, line.number, index + 1, env) }
+    case None => {}
+  }
+  match Directives.tab(text) {
+    case Some(opened) => { return tabs(lines, index, opened.level, env, depth) }
+    case None => {}
+  }
+  match Directives.footnote(text) {
+    case Some((label, first)) => { return footnote(lines, index, label, first, env, depth) }
+    case None => {}
+  }
+  match Layout.atx(text) {
+    case Some((level, content, id)) => {
+      let (children, problems) = inlines(content, line.number, env, depth)
+      return Leaves.Step{blocks: [Syntax.Heading(Syntax.Title{level: level, content: children, id: id, line: line.number})], next: index + 1, diagnostics: problems}
+    }
+    case None => {}
+  }
+  if Layout.thematic(text) { return Leaves.Step{blocks: [Syntax.Rule], next: index + 1, diagnostics: []} }
+  if Option.isSome(&Layout.quote(text)) { return quoted(lines, index, env, depth) }
+  match Layout.marker(text) {
+    case Some(first) => { return listed(lines, index, &first, env, depth) }
+    case None => {}
+  }
+  if Layout.html(text) { return Leaves.markup(lines, index) }
+  if index + 1 < lines.length() && text.contains("|") {
+    match Layout.alignments(lines[index + 1].text) {
+      case Some(align) => {
+        if Layout.cells(text).length() == align.length() { return table(lines, index, &align, env, depth) }
+      }
+      case None => {}
+    }
+  }
+  paragraph(lines, index, env, depth)
+}
+
+/// A triple-colon container: code, image, video, or row layout.
+fn directive(lines: &Array[FrontMatter.Line], index: Int, found: &Directives.Directive, env: &Env, depth: Int) -> Leaves.Step {
+  let number = lines[index].number
+  if found.name == "code" {
+    let region = Directives.value(found, "id")
+    let written = Directives.value(found, "source")
+    var query: Array[Str] = []
+    for key in ["range", "highlight"] {
+      let held = Directives.value(found, key)
+      if !held.isEmpty() { query = query.push(key + "=" + held) }
+    }
+    let destination = written + (if region.isEmpty() { "" } else { "#" + region }) + (if query.isEmpty() { "" } else { "?" + query.join("&") })
+    return excerpt(destination, Directives.value(found, "language"), Directives.value(found, "title"), number, index + 1, env)
+  }
+  if found.name == "video" {
+    return Leaves.Step{blocks: [Syntax.Video(Directives.value(found, "source"))], next: index + 1, diagnostics: []}
+  }
+  let container = !found.closed || found.name == "row" || found.name == "column" || (found.name == "image" && Directives.value(found, "type") == "complex")
+  let close = if container { Directives.extent(lines, index, found.name) } else { index }
+  if close < 0 {
+    return Leaves.Step{blocks: [], next: index + 1, diagnostics: [Docgen.error(Codes.DIRECTIVE_UNCLOSED, env.origin, number, "directive " + found.name + " has no :::" + found.name + "-end::: line")]}
+  }
+  let body = lines.slice(index + 1, close)
+  if found.name == "image" {
+    let caption = parse(&body, env, depth + 1)
+    let kind = Directives.value(found, "type")
+    let figure = Syntax.Figure{source: Directives.value(found, "source"), alt: Directives.value(found, "alt-text"), kind: if kind.isEmpty() { "content" } else { kind }, lightbox: Directives.value(found, "lightbox"), caption: caption.blocks, line: number}
+    let problems = if figure.source.isEmpty() { [Docgen.error(Codes.DIRECTIVE_INVALID, env.origin, number, "image directive needs a source")] } else { [] }
+    return Leaves.Step{blocks: [Syntax.Image(figure)], next: close + 1, diagnostics: problems.concat(caption.diagnostics)}
+  }
+  if found.name == "row" {
+    var columns: Array[Syntax.Column] = []
+    var problems: Array[Docgen.Diagnostic] = []
+    for (span, content) in Directives.columns(&body) {
+      let parsed = parse(&content, env, depth + 1)
+      columns = columns.push(Syntax.Column{span: span, blocks: parsed.blocks})
+      problems = problems.concat(parsed.diagnostics)
+    }
+    return Leaves.Step{blocks: [Syntax.Grid(columns)], next: close + 1, diagnostics: problems}
+  }
+  let parsed = parse(&body, env, depth + 1)
+  let problem = Docgen.warning(Codes.DIRECTIVE_INVALID, env.origin, number, "unsupported directive " + found.name + "; its content is shown without it")
+  Leaves.Step{blocks: parsed.blocks, next: close + 1, diagnostics: parsed.diagnostics.push(problem)}
+}
+
+/// Blocks of another file placed where a whole-line include stands.
+fn included(written: Str, number: Int, next: Int, env: &Env, depth: Int) -> Leaves.Step {
+  let problem = |code: Str, message: Str| Leaves.Step{blocks: [], next: next, diagnostics: [Docgen.error(code, env.origin, number, message)]}
+  let located = match Layout.locate(env.origin, written) {
+    case Ok(found) => found
+    case Err(reason) => { return problem(Codes.PATH_INVALID, reason) }
+  }
+  if env.trail.contains(located) { return problem(Codes.INCLUDE_CYCLE, "include cycle: " + env.trail.push(located).join(" -> ")) }
+  let text = match Map.get(&env.files, located) {
+    case Some(found) => found
+    case None => { return problem(Codes.INCLUDE_MISSING, "included file not found: " + located) }
+  }
+  let header = match FrontMatter.split(text) {
+    case Ok(found) => found
+    case Err((line, message)) => { return Leaves.Step{blocks: [], next: next, diagnostics: [Docgen.error(Codes.FRONT_MATTER_INVALID, located, line, message)]} }
+  }
+  let (found, rest) = Layout.definitions(&header.lines)
+  let child = Env{..*env, origin: located, trail: env.trail.push(located), definitions: Map.merge(&env.definitions, &found)}
+  let parsed = parse(&rest, &child, depth + 1)
+  Leaves.Step{blocks: [Syntax.Included(located, parsed.blocks)], next: next, diagnostics: parsed.diagnostics}
+}
+
+/// A code block excerpted from a loaded file.
+fn excerpt(destination: Str, language: Str, title: Str, number: Int, next: Int, env: &Env) -> Leaves.Step {
+  let problem = |code: Str, message: Str| Leaves.Step{blocks: [], next: next, diagnostics: [Docgen.error(code, env.origin, number, message)]}
+  let chosen = match Snippet.selection(destination) {
+    case Ok(found) => found
+    case Err(reason) => { return problem(Codes.EXCERPT_INVALID, reason) }
+  }
+  let located = match Layout.locate(env.origin, chosen.path) {
+    case Ok(found) => found
+    case Err(reason) => { return problem(Codes.PATH_INVALID, reason) }
+  }
+  let text = match Map.get(&env.files, located) {
+    case Some(found) => found
+    case None => { return problem(Codes.EXCERPT_MISSING, "excerpted file not found: " + located) }
+  }
+  let (code, highlight) = match Snippet.extract(text, &chosen) {
+    case Ok(found) => found
+    case Err(reason) => { return problem(Codes.EXCERPT_INVALID, reason + " in " + located) }
+  }
+  let named = if language.isEmpty() { Languages.ofPath(located) } else { language }
+  Leaves.Step{blocks: [Syntax.CodeBlock(Syntax.Sample{language: named, title: title, text: code, highlight: highlight, line: number})], next: next, diagnostics: []}
+}
+
+/// A tab group: consecutive tab headings of one level, ended by a `---` line.
+fn tabs(lines: &Array[FrontMatter.Line], index: Int, level: Int, env: &Env, depth: Int) -> Leaves.Step {
+  var group: Array[Syntax.Tab] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  var cursor = index
+  var ended = false
+  while cursor < lines.length() && !ended {
+    let heading = match Directives.tab(lines[cursor].text) {
+      case Some(found) => found
+      case None => { break }
+    }
+    if heading.level != level { break }
+    var end = cursor + 1
+    while end < lines.length() && !ended {
+      let text = lines[end].text
+      if text.trim() == "---" || text.trim() == "***" { ended = true } else {
+        match Directives.tab(text) {
+          case Some(other) => { if other.level == level { break } }
+          case None => {}
+        }
+        match Layout.atx(text) {
+          case Some((found, _content, _id)) => { if found <= level && Option.isNone(&Directives.tab(text)) { break } }
+          case None => {}
+        }
+        end = end + 1
+      }
+    }
+    let body = lines.slice(cursor + 1, end)
+    let parsed = parse(&body, env, depth + 1)
+    group = group.push(Syntax.Tab{id: heading.id, title: heading.title, condition: heading.condition, blocks: parsed.blocks})
+    problems = problems.concat(parsed.diagnostics)
+    cursor = if ended { end + 1 } else { end }
+  }
+  Leaves.Step{blocks: [Syntax.TabGroup(group)], next: cursor, diagnostics: problems}
+}
+
+/// A footnote definition: its first line and every following line indented four columns,
+/// with lazy continuation of a paragraph.
+fn footnote(lines: &Array[FrontMatter.Line], index: Int, label: Str, first: Str, env: &Env, depth: Int) -> Leaves.Step {
+  var body = [FrontMatter.Line{text: first, number: lines[index].number}]
+  var end = index + 1
+  while end < lines.length() {
+    let text = lines[end].text
+    if Layout.blank(text) {
+      var ahead = end
+      while ahead < lines.length() && Layout.blank(lines[ahead].text) { ahead = ahead + 1 }
+      if ahead >= lines.length() || Layout.indent(lines[ahead].text) < 4 { break }
+      for gap in end..ahead { body = body.push(FrontMatter.Line{text: "", number: lines[gap].number}) }
+      end = ahead
+    } else if Layout.indent(text) >= 4 {
+      body = body.push(FrontMatter.Line{text: Layout.strip(text, 4), number: lines[end].number})
+      end = end + 1
+    } else if !Layout.interrupts(text) && !Layout.blank(body[body.length() - 1].text) && Option.isNone(&Directives.footnote(text)) {
+      body = body.push(lines[end])
+      end = end + 1
+    } else { break }
+  }
+  let parsed = parse(&body, env, depth + 1)
+  Leaves.Step{blocks: [Syntax.Footnote(label, parsed.blocks)], next: end, diagnostics: parsed.diagnostics}
+}
+
+/// A block quote, an alert when its first line names a kind, or an embedded video.
+fn quoted(lines: &Array[FrontMatter.Line], index: Int, env: &Env, depth: Int) -> Leaves.Step {
+  var body: Array[FrontMatter.Line] = []
+  var end = index
+  while end < lines.length() {
+    let text = lines[end].text
+    match Layout.quote(text) {
+      case Some(inner) => { body = body.push(FrontMatter.Line{text: inner, number: lines[end].number}) }
+      case None => {
+        let lazy = !body.isEmpty() && !Layout.blank(body[body.length() - 1].text) && !Layout.interrupts(text)
+        if !lazy { break }
+        body = body.push(lines[end])
+      }
+    }
+    end = end + 1
+  }
+  if body.length() == 1 {
+    match Directives.video(body[0].text) {
+      case Some(address) => { return Leaves.Step{blocks: [Syntax.Video(address)], next: end, diagnostics: []} }
+      case None => {}
+    }
+  }
+  match Directives.alert(body[0].text) {
+    case Some((kind, rest)) => {
+      if Set.contains(&env.alerts, kind) {
+        let remaining = if rest.isEmpty() { body.slice(1, body.length()) } else { [FrontMatter.Line{text: rest, number: body[0].number}].concat(body.slice(1, body.length())) }
+        let parsed = parse(&remaining, env, depth + 1)
+        return Leaves.Step{blocks: [Syntax.Alert(Syntax.Notice{kind: kind, blocks: parsed.blocks})], next: end, diagnostics: parsed.diagnostics}
+      }
+      let parsed = parse(&body, env, depth + 1)
+      let problem = Docgen.warning(Codes.UNKNOWN_ALERT, env.origin, body[0].number, "unknown alert kind " + kind + "; shown as a quote")
+      return Leaves.Step{blocks: [Syntax.Quote(parsed.blocks)], next: end, diagnostics: parsed.diagnostics.push(problem)}
+    }
+    case None => {}
+  }
+  let parsed = parse(&body, env, depth + 1)
+  Leaves.Step{blocks: [Syntax.Quote(parsed.blocks)], next: end, diagnostics: parsed.diagnostics}
+}
+
+/// Consecutive items sharing a marker kind; blank lines between items make the list loose.
+fn listed(lines: &Array[FrontMatter.Line], index: Int, first: &Layout.Marker, env: &Env, depth: Int) -> Leaves.Step {
+  var items: Array[Syntax.Item] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  var loose = false
+  var cursor = index
+  while cursor < lines.length() {
+    if Layout.thematic(lines[cursor].text) { break }
+    let found = match Layout.marker(lines[cursor].text) {
+      case Some(held) => held
+      case None => { break }
+    }
+    if found.ordered != first.ordered || found.symbol != first.symbol { break }
+    var body = [FrontMatter.Line{text: found.rest, number: lines[cursor].number}]
+    var end = cursor + 1
+    while end < lines.length() {
+      let text = lines[end].text
+      if Layout.blank(text) {
+        var ahead = end
+        while ahead < lines.length() && Layout.blank(lines[ahead].text) { ahead = ahead + 1 }
+        if ahead >= lines.length() || Layout.indent(lines[ahead].text) < found.width { break }
+        for gap in end..ahead { body = body.push(FrontMatter.Line{text: "", number: lines[gap].number}) }
+        loose = loose || !Layout.blank(body[0].text)
+        end = ahead
+      } else if Layout.indent(text) >= found.width {
+        body = body.push(FrontMatter.Line{text: Layout.strip(text, found.width), number: lines[end].number})
+        end = end + 1
+      } else if !Layout.interrupts(text) && !Layout.blank(body[body.length() - 1].text) && Option.isNone(&Layout.marker(text)) {
+        body = body.push(FrontMatter.Line{text: Text.trimStart(text), number: lines[end].number})
+        end = end + 1
+      } else { break }
+    }
+    var checked = -1
+    let lead = body[0].text
+    if lead.startsWith("[ ] ") || lead == "[ ]" { checked = 0 } else if lead.startsWith("[x] ") || lead.startsWith("[X] ") || lead == "[x]" || lead == "[X]" { checked = 1 }
+    if checked >= 0 { body = [FrontMatter.Line{text: lead.drop(4), number: body[0].number}].concat(body.slice(1, body.length())) }
+    let parsed = parse(&body, env, depth + 1)
+    items = items.push(Syntax.Item{checked: checked, blocks: parsed.blocks})
+    problems = problems.concat(parsed.diagnostics)
+    var after = end
+    while after < lines.length() && Layout.blank(lines[after].text) { after = after + 1 }
+    let continues = after < lines.length() && !Layout.thematic(lines[after].text) && match Layout.marker(lines[after].text) {
+      case Some(next) => next.ordered == first.ordered && next.symbol == first.symbol
+      case None => false
+    }
+    if continues && after > end { loose = true }
+    cursor = if continues { after } else { end }
+    if !continues { break }
+  }
+  let listing = Syntax.Listing{ordered: first.ordered, start: first.start, tight: !loose, items: items}
+  Leaves.Step{blocks: [Syntax.ListBlock(listing)], next: cursor, diagnostics: problems}
+}
+
+/// A pipe table; rows are padded or cut to the header width.
+fn table(lines: &Array[FrontMatter.Line], index: Int, align: &Array[Str], env: &Env, depth: Int) -> Leaves.Step {
+  var problems: Array[Docgen.Diagnostic] = []
+  var header: Array[Array[Syntax.Inline]] = []
+  for cell in Layout.cells(lines[index].text) {
+    let (content, found) = inlines(cell, lines[index].number, env, depth)
+    header = header.push(content)
+    problems = problems.concat(found)
+  }
+  var rows: Array[Array[Array[Syntax.Inline]]] = []
+  var end = index + 2
+  while end < lines.length() && !Layout.blank(lines[end].text) && lines[end].text.contains("|") && !Layout.interrupts(lines[end].text) {
+    let written = Layout.cells(lines[end].text)
+    var row: Array[Array[Syntax.Inline]] = []
+    for column in 0..header.length() {
+      let cell = if column < written.length() { written[column] } else { "" }
+      let (content, found) = inlines(cell, lines[end].number, env, depth)
+      row = row.push(content)
+      problems = problems.concat(found)
+    }
+    rows = rows.push(row)
+    end = end + 1
+  }
+  Leaves.Step{blocks: [Syntax.TableBlock(Syntax.Table{align: *align, header: header, rows: rows})], next: end, diagnostics: problems}
+}
+
+/// A paragraph, or a setext heading when an underline follows its lines.
+fn paragraph(lines: &Array[FrontMatter.Line], index: Int, env: &Env, depth: Int) -> Leaves.Step {
+  var collected = [Text.trimStart(lines[index].text)]
+  var end = index + 1
+  var level = 0
+  while end < lines.length() {
+    let text = lines[end].text
+    level = Layout.setext(text)
+    if level > 0 { break }
+    if Layout.interrupts(text) || Option.isSome(&Directives.include(text)) || Option.isSome(&Directives.excerpt(text)) { break }
+    if end + 1 < lines.length() && text.contains("|") && Option.isSome(&Layout.alignments(lines[end + 1].text)) { break }
+    collected = collected.push(Text.trimStart(text))
+    end = end + 1
+  }
+  let text = collected.join("\n")
+  let number = lines[index].number
+  if level > 0 {
+    let (content, problems) = inlines(text.trim(), number, env, depth)
+    return Leaves.Step{blocks: [Syntax.Heading(Syntax.Title{level: level, content: content, id: "", line: number})], next: end + 1, diagnostics: problems}
+  }
+  let trimmed = if text.endsWith(" ") { text.trim() } else { text }
+  let (content, problems) = inlines(trimmed, number, env, depth)
+  Leaves.Step{blocks: [Syntax.Paragraph(content)], next: end, diagnostics: problems}
+}
+
+/// Inline includes replaced by the first paragraph of the named file.
+fn resolved(nodes: Array[Syntax.Inline], line: Int, env: &Env, depth: Int) -> (Array[Syntax.Inline], Array[Docgen.Diagnostic]) {
+  var result: Array[Syntax.Inline] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  for node in nodes {
+    match node {
+      case Syntax.Fragment(written, _title) => {
+        let step = included(written, line, 0, env, depth)
+        problems = problems.concat(step.diagnostics)
+        for held in step.blocks {
+          match held {
+            case Syntax.Included(located, blocks) => {
+              let content = match blocks.isEmpty() {
+                case true => []
+                case false => match blocks[0] {
+                  case Syntax.Paragraph(children) => children
+                  case _ => []
+                }
+              }
+              result = result.push(Syntax.Fragment(located, content))
+            }
+            case _ => {}
+          }
+        }
+      }
+      case other => { result = result.push(other) }
+    }
+  }
+  (result, problems)
+}

@@ -1,0 +1,222 @@
+/** @Docgen.Docset.Seam — a project folder loaded, built, and published */
+module PuduLangDocgen.Docset
+
+import Std.Fs as Fs
+import Std.Io as Io
+import Std.Map as Map
+import Std.Path as Path
+import Std.Time as Time
+import PuduLangDocgen.Api.Catalog as Catalog
+import PuduLangDocgen.Api.Export as Export
+import PuduLangDocgen.Api.Model as Model
+import PuduLangDocgen.Api.Parser as Parser
+import PuduLangDocgen.Build as Build
+import PuduLangDocgen.Build.Sources as Sources
+import PuduLangDocgen.Configuration as Configuration
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen.Constants.Package as Package
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Docset.Publish as Publish
+import PuduLangDocgen.Docset.Tools as Tools
+import PuduLangDocgen.Docset.Walk as Walk
+import PuduLangDocgen.Markdown as Markdown
+import PuduLangDocgen.Meta as Meta
+
+/** @Docgen.Docset.Options — command-line choices layered over the configuration */
+export type Options = {
+  output: Str,
+  metadata: Array[(Str, Docgen.Meta)],
+  xref: Array[Str],
+  templates: Array[Str],
+  warningsAsErrors: Bool,
+  dryRun: Bool,
+  disableGitFeatures: Bool,
+  force: Bool,
+  exportRawModel: Bool,
+  exportViewModel: Bool
+}
+
+/** @Docgen.Docset.Loaded — a project's folder and everything a build reads from it */
+export type Loaded = { base: Str, input: Build.Input, diagnostics: Array[Docgen.Diagnostic] }
+
+/// Options that leave the configuration as written.
+export fn options() -> Options {
+  Options{output: "", metadata: [], xref: [], templates: [], warningsAsErrors: false, dryRun: false, disableGitFeatures: false, force: false, exportRawModel: false, exportViewModel: false}
+}
+
+/// A project read from its configuration file with options applied.
+export fn load(configFile: Str, chosen: &Options) -> Result[Loaded, Array[Docgen.Diagnostic]] {
+  let text = match Io.read(configFile) {
+    case Ok(found) => found
+    case Err(reason) => { return Err([Docgen.error(Codes.CONFIG_UNREADABLE, configFile, 1, reason)]) }
+  }
+  let written = Configuration.parse(Path.nameOf(configFile), text) ?
+  let base = match Fs.canonical(Path.directoryOf(configFile)) {
+    case Ok(found) => found
+    case Err(reason) => { return Err([Docgen.error(Codes.CONFIG_UNREADABLE, configFile, 1, show(reason))]) }
+  }
+  let config = overridden(&written, chosen)
+  var problems: Array[Docgen.Diagnostic] = []
+  let paths = Walk.files(base, &[config.output]) ?
+  let skip = [config.output]
+  let content = Sources.mapped(&config.content, &paths, &skip)
+  let overwrite = Sources.mapped(&config.overwrite, &paths, &skip)
+  let resources = Sources.mapped(&config.resource, &paths, &skip)
+  var wanted: Array[Str] = []
+  for (source, _output) in content.concat(overwrite) { wanted = wanted.push(source) }
+  wanted = wanted.concat(config.globalMetadataFiles).concat(config.fileMetadataFiles)
+  let (files, textProblems) = closure(base, &wanted)
+  problems = problems.concat(textProblems)
+  var units: Array[Array[Model.Unit]] = []
+  for source in config.metadata {
+    var parsed: Array[Model.Unit] = []
+    for (path, _output) in Sources.mapped(&source.mappings, &paths, &skip) {
+      match Walk.text(base, path) {
+        case Ok(held) => { parsed = parsed.push(Parser.parse(path, held)) }
+        case Err(problem) => { problems = problems.push(problem) }
+      }
+    }
+    units = units.push(parsed)
+  }
+  var copied: Array[(Str, Docgen.Resource)] = []
+  for (source, output) in resources {
+    match Walk.bytes(base, source) {
+      case Ok(held) => { copied = copied.push((source, Docgen.Resource{path: output, content: held})) }
+      case Err(problem) => { problems = problems.push(problem) }
+    }
+  }
+  let (template, assets, templateProblems) = templates(base, &config.templates)
+  problems = problems.concat(templateProblems)
+  let (external, xrefProblems) = Tools.references(base, &config.xref)
+  problems = problems.concat(xrefProblems)
+  var diagrams: Map[Str, Str] = mapOf([])
+  if config.diagrams.local {
+    var sources: Array[Str] = []
+    for (path, held) in Map.pairs(&files) {
+      if path.toLower().endsWith(".md") { sources = sources.concat(Markdown.diagrams(&Markdown.parse(path, held, &files, &[]).blocks)) }
+    }
+    let (drawn, diagramProblems) = Tools.diagrams(&sources, &config.diagrams)
+    diagrams = drawn
+    problems = problems.concat(diagramProblems)
+  }
+  let history = if config.gitFeatures { Tools.history(base) } else { mapOf([]) }
+  let repository = if config.gitFeatures { Tools.repository(base, &config.contribution) } else { config.contribution }
+  let today = match Time.format(&Time.currentInstant(), "%Y-%m-%d") {
+    case Ok(found) => found
+    case Err(_) => ""
+  }
+  let input = Build.Input{config: config, paths: paths, files: files, resources: copied, units: units, external: external, template: template, assets: assets, history: history, repository: repository, diagrams: diagrams, generator: Package.VERSION, today: today}
+  Ok(Loaded{base: base, input: input, diagnostics: problems})
+}
+
+/// A project built and, unless the run is dry, published incrementally.
+export fn build(configFile: Str, chosen: &Options, extending: &Build.Extensions) -> Result[Docgen.Report, Array[Docgen.Diagnostic]] {
+  let loaded = load(configFile, chosen) ?
+  let plan = match Build.plan(&loaded.input, extending) {
+    case Ok(found) => found
+    case Err(problems) => { return Err(loaded.diagnostics.concat(problems)) }
+  }
+  let all = Docgen.Plan{..plan, diagnostics: loaded.diagnostics.concat(plan.diagnostics)}
+  if loaded.input.config.dryRun {
+    let planned = all.artifacts.map(|artifact: Docgen.Artifact| artifact.path).concat(all.resources.map(|resource: Docgen.Resource| resource.path))
+    return Ok(Docgen.Report{written: [], unchanged: planned, removed: [], diagnostics: all.diagnostics})
+  }
+  let state = Path.join(Path.join(loaded.base, Package.STATE_FOLDER), "build.json")
+  Publish.publish(Path.join(loaded.base, loaded.input.config.output), &all, state, chosen.force)
+}
+
+/// API metadata written as files beside the configuration, in each source's format.
+export fn metadata(configFile: Str, chosen: &Options) -> Result[Array[Str], Array[Docgen.Diagnostic]] {
+  let loaded = load(configFile, chosen) ?
+  var written: Array[Str] = []
+  var index = 0
+  for source in loaded.input.config.metadata {
+    let units = if index < loaded.input.units.length() { loaded.input.units[index] } else { [] }
+    let selected = Catalog.select(&units, &source.options)
+    let folder = if chosen.output.isEmpty() { source.options.dest } else { chosen.output }
+    for (path, text) in Export.files(&selected, source.format) {
+      let relative = if folder.isEmpty() { path } else { folder + "/" + path }
+      let target = Path.join(loaded.base, relative)
+      match Io.makeDirectory(Path.directoryOf(target)) {
+        case Ok(_) => {}
+        case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, relative, 1, reason)]) }
+      }
+      match Fs.writeTextAtomically(target, text) {
+        case Ok(_) => { written = written.push(relative) }
+        case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, relative, 1, show(reason))]) }
+      }
+    }
+    index = index + 1
+  }
+  Ok(written)
+}
+
+/// The configuration with command-line options applied.
+fn overridden(config: &Configuration.Config, chosen: &Options) -> Configuration.Config {
+  var result = *config
+  if !chosen.output.isEmpty() { result = Configuration.Config{..result, output: chosen.output} }
+  if chosen.warningsAsErrors { result = Configuration.Config{..result, warningsAsErrors: true} }
+  if chosen.dryRun { result = Configuration.Config{..result, dryRun: true} }
+  if chosen.disableGitFeatures { result = Configuration.Config{..result, gitFeatures: false} }
+  if chosen.exportRawModel && result.exportRawModel.isEmpty() { result = Configuration.Config{..result, exportRawModel: result.output} }
+  if chosen.exportViewModel && result.exportViewModel.isEmpty() { result = Configuration.Config{..result, exportViewModel: result.output} }
+  Configuration.Config{..result,
+    globalMetadata: Meta.merge(&result.globalMetadata, &chosen.metadata),
+    xref: result.xref.concat(chosen.xref),
+    templates: result.templates.concat(chosen.templates) }
+}
+
+/// The text of files and of every file their Markdown includes or excerpts, transitively.
+fn closure(base: Str, wanted: &Array[Str]) -> (Map[Str, Str], Array[Docgen.Diagnostic]) {
+  var found: Array[(Str, Str)] = []
+  var seen: Array[Str] = []
+  var queue = *wanted
+  var problems: Array[Docgen.Diagnostic] = []
+  while !queue.isEmpty() {
+    let path = queue[0]
+    queue = queue.slice(1, queue.length())
+    if seen.contains(path) { continue }
+    seen = seen.push(path)
+    match Walk.text(base, path) {
+      case Ok(held) => {
+        found = found.push((path, held))
+        if path.toLower().endsWith(".md") || path.toLower().endsWith(".markdown") {
+          queue = queue.concat(Markdown.dependencies(path, held).filter(|next: Str| !seen.contains(next)))
+        }
+      }
+      case Err(problem) => { if wanted.contains(path) { problems = problems.push(problem) } }
+    }
+  }
+  (mapOf(found), problems)
+}
+
+/// Template overrides and public assets from each template folder in order; later folders
+/// replace files of earlier ones. The built-in `default` and `modern` names add nothing.
+fn templates(base: Str, names: &Array[Str]) -> (Array[(Str, Str)], Array[Docgen.Resource], Array[Docgen.Diagnostic]) {
+  var texts: Array[(Str, Str)] = []
+  var assets: Array[Docgen.Resource] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  for name in *names {
+    if name == "default" || name == "modern" { continue }
+    let folder = Path.join(base, name)
+    match Walk.files(folder, &[]) {
+      case Ok(paths) => {
+        for path in paths {
+          if path.startsWith("public/") {
+            match Walk.bytes(folder, path) {
+              case Ok(held) => { assets = assets.filter(|asset: Docgen.Resource| asset.path != path).push(Docgen.Resource{path: path, content: held}) }
+              case Err(problem) => { problems = problems.push(problem) }
+            }
+          } else if path.endsWith(".html") || path == "token.json" {
+            match Walk.text(folder, path) {
+              case Ok(held) => { texts = texts.push((path, held)) }
+              case Err(problem) => { problems = problems.push(problem) }
+            }
+          }
+        }
+      }
+      case Err(found) => { problems = problems.concat(found) }
+    }
+  }
+  (texts, assets, problems)
+}

@@ -1,0 +1,85 @@
+/** @Docgen.Model.Module — shared documentation values across publishing phases */
+module PuduLangDocgen
+
+/** @Docgen.Model.Severity — diagnostic impact carried through every publishing phase */
+export type Severity = Information | Warning | Error
+
+/** @Docgen.Model.Diagnostic — actionable finding with stable source provenance */
+export type Diagnostic = { code: Str, severity: Severity, path: Str, line: Int, message: Str }
+
+/** @Docgen.Model.Meta — metadata value read from configuration and front matter */
+export type Meta = Text(Str) | Whole(Int) | Flag(Bool) | Items(Array[Meta]) | Fields(Array[(Str, Meta)]) | Nothing
+
+/** @Docgen.Model.Source — named text entering the document pipeline */
+export type Source = { path: Str, text: Str }
+
+/** @Docgen.Model.Resource — opaque bytes copied to the published site */
+export type Resource = { path: Str, content: Bytes }
+
+/** @Docgen.Model.Heading — stable fragment and displayed section title */
+export type Heading = { id: Str, title: Str, level: Int }
+
+/** @Docgen.Model.Link — resolved local destination retained for build validation */
+export type Link = { target: Str, line: Int }
+
+/** @Docgen.Model.Reference — unique identity with a checked browser destination */
+export type Reference = { uid: Str, name: Str, fullName: Str, href: Str, kind: Str }
+
+/** @Docgen.Model.TocItem — nested navigation with an optional destination */
+export type TocItem = { title: Str, href: Str, uid: Str, expanded: Bool, children: Array[TocItem] }
+
+/** @Docgen.Model.Page — rendered content with navigable identity and metadata */
+export type Page = {
+  path: Str,
+  source: Str,
+  kind: Str,
+  title: Str,
+  uid: Str,
+  summary: Str,
+  body: Str,
+  headings: Array[Heading],
+  links: Array[Link],
+  meta: Array[(Str, Meta)]
+}
+
+/** @Docgen.Model.Artifact — complete text ready for confined output publication */
+export type Artifact = { path: Str, content: Str }
+
+/** @Docgen.Model.Plan — validated text and binary output without effects */
+export type Plan = { artifacts: Array[Artifact], resources: Array[Resource], diagnostics: Array[Diagnostic] }
+
+/** @Docgen.Model.Report — published paths and nonfatal diagnostics */
+export type Report = { written: Array[Str], unchanged: Array[Str], removed: Array[Str], diagnostics: Array[Diagnostic] }
+
+/// A diagnostic of the given severity at a one-based source line.
+export fn diagnostic(severity: Severity, code: Str, path: Str, line: Int, message: Str) -> Diagnostic {
+  Diagnostic{code: code, severity: severity, path: path, line: line, message: message}
+}
+
+/// A fatal diagnostic at a one-based source line.
+export fn error(code: Str, path: Str, line: Int, message: Str) -> Diagnostic {
+  diagnostic(Error, code, path, line, message)
+}
+
+/// A warning at a one-based source line.
+export fn warning(code: Str, path: Str, line: Int, message: Str) -> Diagnostic {
+  diagnostic(Warning, code, path, line, message)
+}
+
+/// Whether any diagnostic is fatal.
+export fn failed(diagnostics: &Array[Diagnostic]) -> Bool {
+  for held in *diagnostics {
+    if held.severity == Error { return true }
+  }
+  false
+}
+
+/// A diagnostic rendered as `path:line: severity CODE: message`.
+export fn describe(held: &Diagnostic) -> Str {
+  let label = match held.severity {
+    case Information => "info"
+    case Warning => "warning"
+    case Error => "error"
+  }
+  held.path + ":" + show(held.line) + ": " + label + " " + held.code + ": " + held.message
+}

@@ -1,0 +1,200 @@
+/** @Docgen.Markdown.Phrase — inline HTML with checked links, images, and cross references */
+module PuduLangDocgen.Markdown.Phrase
+
+import Std.Map as Map
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown.Syntax as Syntax
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Markdown.Rendering — site-wide choices about how article content renders */
+export type Rendering = { newTab: Bool, plantUml: Str, diagrams: Map[Str, Str], alertClasses: Map[Str, Str], alertTitles: Map[Str, Str] }
+
+/** @Docgen.Markdown.Scope — where a page is published and what its links may reach */
+export type Scope = { page: Str, source: Str, outputs: Map[Str, Str], references: Map[Str, Docgen.Reference], settings: Rendering }
+
+/** @Docgen.Markdown.Out — rendered pieces and facts gathered while rendering one page */
+export type Out = {
+  pieces: Array[Str],
+  headings: Array[Docgen.Heading],
+  ids: Array[Str],
+  links: Array[Docgen.Link],
+  diagnostics: Array[Docgen.Diagnostic],
+  features: Array[Str],
+  groups: Int,
+  notes: Array[Str]
+}
+
+/// Server that draws PlantUML diagrams unless configured otherwise.
+const PLANT_UML: Str = "https://www.plantuml.com/plantuml/svg"
+
+/// File extensions played as video when an image names them.
+const VIDEO_FILES: Array[Str] = [".mp4", ".webm", ".ogg", ".ogv", ".mov"]
+
+/// Rendering choices used when a site configures none.
+export fn rendering() -> Rendering {
+  Rendering{newTab: false, plantUml: PLANT_UML, diagrams: mapOf([]), alertClasses: mapOf([]), alertTitles: mapOf([])}
+}
+
+/// An empty accumulator.
+export fn start() -> Out {
+  Out{pieces: [], headings: [], ids: [], links: [], diagnostics: [], features: [], groups: 0, notes: []}
+}
+
+/// The accumulator with text appended.
+export fn emit(out: Out, text: Str) -> Out { Out{..out, pieces: out.pieces.push(text)} }
+
+/// The accumulator with a diagnostic recorded.
+export fn report(out: Out, found: Docgen.Diagnostic) -> Out { Out{..out, diagnostics: out.diagnostics.push(found)} }
+
+/// The accumulator noting that a page needs a client feature such as `math` or `mermaid`.
+export fn need(out: Out, feature: Str) -> Out {
+  if out.features.contains(feature) { out } else { Out{..out, features: out.features.push(feature)} }
+}
+
+/// Inline nodes appended as HTML; `origin` is the file the nodes were written in.
+export fn inlines(out: Out, nodes: &Array[Syntax.Inline], context: &Scope, origin: Str) -> Out {
+  var held = out
+  for node in *nodes { held = inline(held, &node, context, origin) }
+  held
+}
+
+/// The browser destination of a written link, recording local targets for validation.
+/// Unsafe and unknown destinations produce diagnostics and answer the empty text.
+export fn destination(out: Out, target: &Syntax.Target, context: &Scope, origin: Str, image: Bool) -> (Out, Str) {
+  let written = target.destination
+  if !Paths.href(written) {
+    return (report(out, Docgen.warning(Codes.UNSAFE_DESTINATION, origin, target.line, "unsafe destination is not linked: " + written)), "")
+  }
+  if Paths.remote(written) { return (out, written) }
+  let local = Out{..out, links: out.links}
+  if written.startsWith("#") {
+    return (Out{..local, links: local.links.push(Docgen.Link{target: context.page + written, line: target.line})}, written)
+  }
+  let path = Paths.pathOf(written)
+  let suffix = Paths.suffixOf(written)
+  let resolved = match Paths.join(Paths.directoryOf(origin), path) {
+    case Ok(found) => found
+    case Err(reason) => { return (report(out, Docgen.warning(Codes.DESTINATION_ESCAPES, origin, target.line, reason + ": " + written)), "") }
+  }
+  let published = match Map.get(&context.outputs, resolved) {
+    case Some(found) => found
+    case None => {
+      let code = if image { Codes.IMAGE_MISSING } else { Codes.LINK_BROKEN }
+      let noun = if image { "image" } else { "link target" }
+      return (report(out, Docgen.warning(code, origin, target.line, noun + " not found: " + resolved)), written)
+    }
+  }
+  let recorded = Out{..out, links: out.links.push(Docgen.Link{target: published + fragmentOf(suffix), line: target.line})}
+  (recorded, Paths.between(context.page, published) + suffix)
+}
+
+/// The fragment part of a query and fragment suffix, including `#`.
+fn fragmentOf(suffix: Str) -> Str {
+  let at = suffix.indexOf("#")
+  if at < 0 { "" } else { suffix.drop(at) }
+}
+
+/// A browser destination to a reference, relative to the page unless remote.
+export fn referenceHref(reference: &Docgen.Reference, context: &Scope) -> Str {
+  if Paths.remote(reference.href) { reference.href } else { Paths.between(context.page, reference.href) }
+}
+
+/// One inline node appended as HTML.
+fn inline(out: Out, node: &Syntax.Inline, context: &Scope, origin: Str) -> Out {
+  match node {
+    case Syntax.Text(written) => emit(out, Paths.escape(written))
+    case Syntax.Code(written) => emit(out, "<code>" + Paths.escape(written) + "</code>")
+    case Syntax.Emphasis(children) => emit(inlines(emit(out, "<em>"), &children, context, origin), "</em>")
+    case Syntax.Strong(children) => emit(inlines(emit(out, "<strong>"), &children, context, origin), "</strong>")
+    case Syntax.Strike(children) => emit(inlines(emit(out, "<del>"), &children, context, origin), "</del>")
+    case Syntax.Subscript(children) => emit(inlines(emit(out, "<sub>"), &children, context, origin), "</sub>")
+    case Syntax.Superscript(children) => emit(inlines(emit(out, "<sup>"), &children, context, origin), "</sup>")
+    case Syntax.Inserted(children) => emit(inlines(emit(out, "<ins>"), &children, context, origin), "</ins>")
+    case Syntax.Marked(children) => emit(inlines(emit(out, "<mark>"), &children, context, origin), "</mark>")
+    case Syntax.Note(label) => note(out, label)
+    case Syntax.Anchor(target, children) => anchor(out, &target, &children, context, origin)
+    case Syntax.Picture(target, alt) => picture(out, &target, alt, context, origin)
+    case Syntax.Xref(reference) => xref(out, &reference, context, origin)
+    case Syntax.Math(written) => emit(need(out, "math"), "<span class=\"math\">\\(" + Paths.escape(written) + "\\)</span>")
+    case Syntax.Markup(written) => emit(out, written)
+    case Syntax.LineBreak => emit(out, "<br>\n")
+    case Syntax.SoftBreak => emit(out, "\n")
+    case Syntax.Fragment(located, children) => inlines(out, &children, context, located)
+  }
+}
+
+/// A link; remote links carry the `external` class and may open a new tab.
+fn anchor(out: Out, target: &Syntax.Target, children: &Array[Syntax.Inline], context: &Scope, origin: Str) -> Out {
+  let (checked, href) = destination(out, target, context, origin, false)
+  if href.isEmpty() { return inlines(checked, children, context, origin) }
+  let title = if target.title.isEmpty() { "" } else { " title=\"" + Paths.escape(target.title) + "\"" }
+  let external = if Paths.remote(href) && !href.toLower().startsWith("mailto:") {
+    if context.settings.newTab { " class=\"external\" target=\"_blank\" rel=\"noopener noreferrer\"" } else { " class=\"external\"" }
+  } else { "" }
+  let opened = emit(checked, "<a href=\"" + Paths.escape(href) + "\"" + title + external + ">")
+  emit(inlines(opened, children, context, origin), "</a>")
+}
+
+/// A numbered reference to a footnote; the first reference of a label carries its anchor.
+fn note(out: Out, label: Str) -> Out {
+  let id = Paths.slug(label)
+  let seen = out.notes.contains(label)
+  let recorded = if seen { out } else { Out{..out, notes: out.notes.push(label)} }
+  var number = 1
+  for held in recorded.notes {
+    if held == label { break }
+    number = number + 1
+  }
+  let marker = if seen { "" } else { " id=\"fnref-" + id + "\"" }
+  emit(recorded, "<sup class=\"footnote-ref\"><a href=\"#fn-" + id + "\"" + marker + ">" + show(number) + "</a></sup>")
+}
+
+/// An embedded player for an address on a known video host or naming a video file, or the
+/// empty text for other addresses.
+fn media(address: Str, alt: Str) -> Str {
+  let lowered = address.toLower()
+  let title = Paths.escape(if alt.isEmpty() { "Video" } else { alt })
+  var embed = ""
+  if lowered.startsWith("https://www.youtube.com/watch?v=") || lowered.startsWith("https://youtube.com/watch?v=") {
+    embed = "https://www.youtube-nocookie.com/embed/" + address.split("v=")[1].split("&")[0]
+  } else if lowered.startsWith("https://youtu.be/") {
+    embed = "https://www.youtube-nocookie.com/embed/" + address.drop(17).split("?")[0]
+  } else if lowered.startsWith("https://vimeo.com/") {
+    embed = "https://player.vimeo.com/video/" + address.drop(18).split("?")[0]
+  }
+  if !embed.isEmpty() { return "<span class=\"video\"><iframe src=\"" + Paths.escape(embed) + "\" title=\"" + title + "\" loading=\"lazy\" allowfullscreen></iframe></span>" }
+  for suffix in VIDEO_FILES {
+    if Paths.pathOf(lowered).endsWith(suffix) { return "<video controls preload=\"metadata\" src=\"" + Paths.escape(address) + "\" title=\"" + title + "\"></video>" }
+  }
+  ""
+}
+
+/// An image loaded lazily with alternate text, or a player when it names a video.
+fn picture(out: Out, target: &Syntax.Target, alt: Str, context: &Scope, origin: Str) -> Out {
+  let player = if Paths.href(target.destination) && Paths.remote(target.destination) { media(target.destination, alt) } else { "" }
+  if !player.isEmpty() { return emit(out, player) }
+  let (checked, src) = destination(out, target, context, origin, true)
+  if src.isEmpty() { return emit(checked, Paths.escape(alt)) }
+  let title = if target.title.isEmpty() { "" } else { " title=\"" + Paths.escape(target.title) + "\"" }
+  emit(checked, "<img src=\"" + Paths.escape(src) + "\" alt=\"" + Paths.escape(alt) + "\"" + title + " loading=\"lazy\">")
+}
+
+/// A cross reference linked to its target, or marked unresolved with a warning.
+fn xref(out: Out, span: &Syntax.XrefSpan, context: &Scope, origin: Str) -> Out {
+  match Map.get(&context.references, span.uid) {
+    case Some(reference) => {
+      let opened = emit(out, "<a class=\"xref\" href=\"" + Paths.escape(referenceHref(&reference, context)) + "\">")
+      let named = if span.text.isEmpty() {
+        emit(opened, Paths.escape(if span.display == "fullName" && !reference.fullName.isEmpty() { reference.fullName } else { reference.name }))
+      } else { inlines(opened, &span.text, context, origin) }
+      emit(named, "</a>")
+    }
+    case None => {
+      let warned = report(out, Docgen.warning(Codes.XREF_UNRESOLVED, origin, span.line, "unresolved cross reference: " + span.uid))
+      let opened = emit(warned, "<span class=\"xref unresolved\">")
+      let named = if span.text.isEmpty() { emit(opened, Paths.escape(if span.optional { "@" + span.uid } else { span.uid })) } else { inlines(opened, &span.text, context, origin) }
+      emit(named, "</span>")
+    }
+  }
+}

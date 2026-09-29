@@ -1,0 +1,98 @@
+/** @Docgen.Docset.Tests — projects load from disk and publish incrementally */
+module PuduLangDocgen.DocsetTest
+
+import Std.Env as Env
+import Std.Fs as Fs
+import Std.Io as Io
+import Std.Path as Path
+import Std.Test as Test
+import PuduLangDocgen.Build as Build
+import PuduLangDocgen.Command as Command
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Docset as Docset
+import PuduLangDocgen.Docset.Walk as Walk
+import PuduLangDocgen.Serve as Serve
+
+/// Files of the project written for these checks.
+const PROJECT: Array[(Str, Str)] = [
+  ("docgen.json", "\{\"build\": \{\"content\": [\{\"files\": [\"**/*.md\", \"**/toc.yml\"], \"src\": \"docs\"\}], \"resource\": [\{\"files\": \"*.png\", \"src\": \"docs\"\}]\}\}"),
+  ("docs/index.md", "# Home\n\n[!INCLUDE[note](shared/note.md)]\n\n![logo](logo.png)"),
+  ("docs/other.md", "# Other"),
+  ("docs/shared/note.md", "Shared note."),
+  ("docs/logo.png", "PNG"),
+  ("docs/.draft.md", "# Hidden")
+]
+
+/// Writes the project under a folder.
+fn write(root: Str) -> Bool {
+  for (path, text) in PROJECT {
+    let target = Path.join(root, path)
+    let _folder = Io.makeDirectory(Path.directoryOf(target))
+    match Io.write(target, text) {
+      case Ok(_) => {}
+      case Err(_) => { return false }
+    }
+  }
+  true
+}
+
+/// A build report, or an empty one with the failure codes as written paths.
+fn built(config: Str, chosen: &Docset.Options) -> Docgen.Report {
+  match Docset.build(config, chosen, &Build.extensions()) {
+    case Ok(report) => report
+    case Err(problems) => Docgen.Report{written: problems.map(|problem: Docgen.Diagnostic| problem.code + " " + problem.message), unchanged: [], removed: [], diagnostics: []}
+  }
+}
+
+/// Parsed command-line parts, or the refusal.
+fn parsed(arguments: Array[Str]) -> Str {
+  match Command.parse(&arguments) {
+    case Ok(found) => found.command + "|" + found.positional.join(",") + "|" + found.flags.join(",") + "|" + found.values.map(fn(entry: (Str, Str)) -> Str {
+        let (name, value) = entry
+        name + "=" + value
+      }).join(",")
+    case Err(reason) => reason
+  }
+}
+
+/// Runs every loading, publishing, command, and serving contract.
+fn main() -> Int {
+  let root = match Fs.temporaryDirectoryIn(Env.temporaryDirectory(), "docgen-test") {
+    case Ok(found) => found
+    case Err(_) => ""
+  }
+  let ready = !root.isEmpty() && write(root)
+  let config = Path.join(root, "docgen.json")
+  let quiet = Docset.Options{..Docset.options(), disableGitFeatures: true}
+  let first = built(config, &quiet)
+  let second = built(config, &quiet)
+  let forced = built(config, &Docset.Options{..quiet, force: true})
+  let _gone = Io.remove(Path.join(root, "docs/other.md"))
+  let third = built(config, &quiet)
+  let dry = built(config, &Docset.Options{..quiet, dryRun: true, output: "preview"})
+  let site = Path.join(root, "_site")
+  let checks = Test.suite("Docset", &[
+      Test.that("project written", ready),
+      Test.equals("first build writes everything", &first.written.length(), &11),
+      Test.equals("second build writes nothing", &(second.written, second.unchanged.length()), &([], 11)),
+      Test.equals("force rewrites", &forced.written.length(), &11),
+      Test.that("stale outputs removed", third.removed.contains("other.html") && !Io.exists(Path.join(site, "other.html"))),
+      Test.that("include resolved from disk", match Io.read(Path.join(site, "index.html")) { case Ok(text) => text.contains("Shared note.") case Err(_) => false }),
+      Test.that("resource copied", Io.exists(Path.join(site, "logo.png"))),
+      Test.that("hidden files skipped", match Walk.files(root, &[]) { case Ok(paths) => !paths.contains("docs/.draft.md") && paths.contains("docs/other.md") == false case Err(_) => false }),
+      Test.that("dry run writes nothing", dry.written.isEmpty() && !dry.unchanged.isEmpty() && !Io.exists(Path.join(root, "preview"))),
+      Test.equals("missing configuration", &built(Path.join(root, "none.json"), &quiet).written.length(), &1),
+      Test.that("state kept beside the configuration", Io.exists(Path.join(root, ".docgen/build.json"))),
+      Test.equals("command parsing", &[parsed(["build", "site", "-o", "out", "--force"]), parsed(["serve", "_site", "--port", "9000"]), parsed(["--dryRun"])], &["build|site|--force|--output=out", "serve|_site||--port=9000", "||--dryRun|"]),
+      Test.equals("command refusals", &[parsed(["--bogus"]), parsed(["build", "-o"]), parsed(["a", "b"])], &["unknown option --bogus", "option -o needs a value", "expected at most one path, found a b"]),
+      Test.equals("help and version", &[Command.run(&["help"]), Command.run(&["version"]), Command.run(&["--nope"])], &[0, 0, 2]),
+      Test.equals("request targets", &["/", "/guide/", "/a%20b.html", "/x.html?q=1", "/../secret", "/%zz"].map(|path: Str| Serve.target(path)), &[Some("index.html"), Some("guide/index.html"), Some("a b.html"), Some("x.html"), None, None]),
+      Test.equals("served pages", &[Serve.answer(site, "/index.html").status.code, Serve.answer(site, "/missing.html").status.code], &[200, 404]),
+      Test.that("not found page served", Serve.answer(site, "/missing.html").body.contains("Page not found") || match Serve.answer(site, "/missing.html").binaryBody { case Some(_) => true case None => false })
+    ])
+  let _cleaned = Fs.removeTree(root)
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

@@ -1,0 +1,34 @@
+/** @Inventory.Model.Module — stock items and their quantities */
+module Inventory
+
+/** @Inventory.Model.Item — one stocked product */
+export type Item = {
+  /// Stock keeping unit, unique per product.
+  sku: Str,
+  /// Units on hand.
+  quantity: Int
+}
+
+/** @Inventory.Model.Change — why a quantity moved */
+export type Change = Received(Int) | Sold(Int) | Counted(Int)
+
+/// An item with no units on hand.
+export fn empty(sku: Str) -> Item { Item{sku: sku, quantity: 0} }
+
+/// The item after a change is applied; a count replaces the quantity.
+///
+/// ## Examples
+///
+/// ```pudu
+/// let item = Inventory.apply(Inventory.empty("A-1"), Inventory.Received(5))
+/// ```
+export fn apply(item: Item, change: Change) -> Item {
+  match change {
+    case Received(count) => Item{..item, quantity: item.quantity + count}
+    case Sold(count) => Item{..item, quantity: item.quantity - count}
+    case Counted(count) => Item{..item, quantity: count}
+  }
+}
+
+/// Largest quantity a single change may carry.
+export const LIMIT: Int = 100000

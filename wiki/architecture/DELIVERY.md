@@ -6,6 +6,9 @@ Keep reviewable PRs below 600 changed lines; use `Refs #N` for partitions and `C
 for the last partition. Independent reviewers cannot author the implementation they approve.
 Public APIs require Language Architect review; every partition requires Forensic Guardian parity.
 
+Mutation testing over the pure layer gates pull requests into `main`; pull requests into `dev`
+run compilation, formatting, lint, tests, and examples.
+
 Release only after configuration, articles, metadata, navigation, references, templates, search,
 resources, preview, incremental behavior, export, diagnostic, package, mutation, and platform
 acceptance evidence is complete. Release notes state tested contracts and supported limits.

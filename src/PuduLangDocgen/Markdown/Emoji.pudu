@@ -1,0 +1,13 @@
+/** @Docgen.Markdown.Emoji — short codes for every fully-qualified Unicode 18.0 emoji */
+module PuduLangDocgen.Markdown.Emoji
+
+import PuduLangDocgen.Markdown.Emoji.Early as Early
+import PuduLangDocgen.Markdown.Emoji.Late as Late
+
+/// The emoji a short code names without its colons. Codes are Unicode names in lower case
+/// joined by underscores, such as `thumbs_up_medium_skin_tone` or `flag_japan`, and the
+/// common short aliases such as `tada`, `smile`, and `+1`.
+export fn lookup(code: Str) -> Option[Str] {
+  let first = if code.isEmpty() { "" } else { code.take(1) }
+  if first >= "a" && first <= "l" { Early.lookup(code) } else { Late.lookup(code) }
+}

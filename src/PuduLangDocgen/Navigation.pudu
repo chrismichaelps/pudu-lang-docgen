@@ -1,0 +1,158 @@
+/** @Docgen.Navigation.Module — table of contents files read into nested items */
+module PuduLangDocgen.Navigation
+
+import Std.Json as Json
+import Std.List as List
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.Yaml as Yaml
+
+/** @Docgen.Navigation.Toc — items of one table of contents with its own metadata */
+export type Toc = { items: Array[Docgen.TocItem], meta: Array[(Str, Docgen.Meta)] }
+
+/// Deepest item nesting a table of contents may declare.
+const MAX_LEVELS: Int = 32
+
+/// Fields an item may declare; `name` and `displayName` title it, `topicHref` and `topicUid`
+/// give a group its own page.
+const FIELDS: Array[Str] = ["name", "displayName", "title", "href", "topicHref", "uid", "topicUid", "items", "expanded"]
+
+/// Whether a project-relative path names a table of contents file.
+export fn isToc(path: Str) -> Bool {
+  let name = path.split("/")[path.split("/").length() - 1].toLower()
+  name == "toc.yml" || name == "toc.yaml" || name == "toc.json" || name == "toc.md"
+}
+
+/// A table of contents written as YAML, JSON, or Markdown headings. An object form holds
+/// `items` beside metadata such as `order` or `pdf`. Hrefs are kept as written; resolution
+/// happens against the published docset.
+export fn parse(path: Str, text: Str) -> Result[Toc, Array[Docgen.Diagnostic]] {
+  let lowered = path.toLower()
+  if lowered.endsWith(".md") { return Ok(Toc{items: markdown(path, text) ?, meta: []}) }
+  let value = if lowered.endsWith(".json") {
+    match Json.decode(text) {
+      case Ok(found) => Meta.fromJson(&found)
+      case Err(problem) => { return Err([Docgen.error(Codes.TOC_SYNTAX, path, 1, "table of contents is not valid JSON: " + Json.explain(&problem))]) }
+    }
+  } else {
+    match Yaml.decode(text) {
+      case Ok(found) => found
+      case Err(reason) => { return Err([Docgen.error(Codes.TOC_SYNTAX, path, 1, "table of contents is not valid YAML: " + reason)]) }
+    }
+  }
+  var meta: Array[(Str, Docgen.Meta)] = []
+  let listed = match value {
+    case Docgen.Items(entries) => entries
+    case Docgen.Fields(fields) => match Meta.get(&fields, "items") {
+      case Some(Docgen.Items(entries)) => {
+        for (key, held) in fields {
+          if key != "items" { meta = meta.push((key, held)) }
+        }
+        entries
+      }
+      case _ => { return Err([Docgen.error(Codes.TOC_SHAPE, path, 1, "table of contents object needs an items list")]) }
+    }
+    case Docgen.Nothing => []
+    case _ => { return Err([Docgen.error(Codes.TOC_SHAPE, path, 1, "table of contents must be a list of items")]) }
+  }
+  Ok(Toc{items: items(path, &listed, 1) ?, meta: meta})
+}
+
+/// Items of a Markdown table of contents: each heading level nests one deeper.
+/// `# [Title](href)` links an item; `# Title` makes a group.
+export fn markdown(path: Str, text: Str) -> Result[Array[Docgen.TocItem], Array[Docgen.Diagnostic]] {
+  var entries: Array[(Int, Docgen.TocItem, Int)] = []
+  var number = 0
+  for line in text.replace("\r\n", "\n").split("\n") {
+    number = number + 1
+    let body = line.trim()
+    if body.startsWith("#") {
+      var level = 0
+      for character in body.chars() {
+        if character != '#' { break }
+        level = level + 1
+      }
+      let content = body.drop(level).trim()
+      if content.isEmpty() { return Err([Docgen.error(Codes.TOC_HEADING_EMPTY, path, number, "table of contents heading has no title")]) }
+      var title = content
+      var href = ""
+      if content.startsWith("[") && content.endsWith(")") && content.contains("](") {
+        let middle = content.indexOf("](")
+        title = content.drop(1).take(middle - 1)
+        href = content.drop(middle + 2).take(content.length() - middle - 3).trim()
+      }
+      if !href.isEmpty() && !Paths.href(href) { return Err([Docgen.error(Codes.TOC_UNSAFE, path, number, "unsafe table of contents destination: " + href)]) }
+      entries = entries.push((level, Docgen.TocItem{title: title, href: href, uid: "", expanded: false, children: []}, number))
+    }
+  }
+  let (tree, _next) = nest(&entries, 0, 1)
+  Ok(tree)
+}
+
+/// Items for published pages when no table of contents exists, ordered by path.
+export fn forPages(pages: &Array[Docgen.Page]) -> Array[Docgen.TocItem] {
+  let ordered = List.sortBy(pages, |left: Docgen.Page, right: Docgen.Page| left.path < right.path)
+  ordered.filter(|page: Docgen.Page| page.kind != "redirect").map(|page: Docgen.Page| Docgen.TocItem{title: page.title, href: page.path, uid: "", expanded: false, children: []})
+}
+
+/// Items as JSON with `name`, `href`, `expanded`, and nested `items`.
+export fn toJson(tree: &Array[Docgen.TocItem]) -> Json.Json {
+  Json.list(&tree.map(fn(entry: Docgen.TocItem) -> Json.Json {
+        var fields = [("name", Json.Text(entry.title))]
+        if !entry.href.isEmpty() { fields = fields.push(("href", Json.Text(entry.href))) }
+        if entry.expanded { fields = fields.push(("expanded", Json.Boolean(true))) }
+        if !entry.children.isEmpty() { fields = fields.push(("items", toJson(&entry.children))) }
+        Json.object(&fields)
+      }))
+}
+
+/// Headings from an index grouped under the nearest shallower heading.
+fn nest(entries: &Array[(Int, Docgen.TocItem, Int)], from: Int, level: Int) -> (Array[Docgen.TocItem], Int) {
+  var result: Array[Docgen.TocItem] = []
+  var index = from
+  while index < entries.length() {
+    let (depth, heading, _line) = entries[index]
+    if depth < level { break }
+    let (children, next) = nest(entries, index + 1, depth + 1)
+    result = result.push(Docgen.TocItem{..heading, children: children})
+    index = next
+  }
+  (result, index)
+}
+
+/// Items of a list, bounded in depth.
+fn items(path: Str, listed: &Array[Docgen.Meta], level: Int) -> Result[Array[Docgen.TocItem], Array[Docgen.Diagnostic]] {
+  if level > MAX_LEVELS { return Err([Docgen.error(Codes.TOC_TOO_DEEP, path, 1, "table of contents nests deeper than " + show(MAX_LEVELS) + " levels")]) }
+  var result: Array[Docgen.TocItem] = []
+  for held in *listed { result = result.push(item(path, &held, level) ?) }
+  Ok(result)
+}
+
+/// One item with checked fields and destination.
+fn item(path: Str, held: &Docgen.Meta, level: Int) -> Result[Docgen.TocItem, Array[Docgen.Diagnostic]] {
+  let fields = match held {
+    case Docgen.Fields(found) => found
+    case _ => { return Err([Docgen.error(Codes.TOC_SHAPE, path, 1, "table of contents item must be a mapping")]) }
+  }
+  for (key, _value) in fields {
+    if !FIELDS.contains(key) { return Err([Docgen.error(Codes.TOC_UNKNOWN_FIELD, path, 1, "unknown table of contents field: " + key)]) }
+  }
+  let title = Meta.textOr(&fields, "displayName", Meta.textOr(&fields, "name", Meta.textOr(&fields, "title", "")))
+  let href = Meta.textOr(&fields, "topicHref", Meta.textOr(&fields, "href", ""))
+  let nestedHref = if Meta.text(&fields, "topicHref") != None { Meta.textOr(&fields, "href", "") } else { "" }
+  let uid = Meta.textOr(&fields, "topicUid", Meta.textOr(&fields, "uid", ""))
+  let children = match Meta.get(&fields, "items") {
+    case Some(Docgen.Items(listed)) => items(path, &listed, level + 1) ?
+    case Some(Docgen.Nothing) => []
+    case None => []
+    case _ => { return Err([Docgen.error(Codes.TOC_SHAPE, path, 1, "items of " + title + " must be a list")]) }
+  }
+  if title.trim().isEmpty() && uid.isEmpty() && href.isEmpty() { return Err([Docgen.error(Codes.TOC_NAMELESS, path, 1, "table of contents item needs a name, uid, or href")]) }
+  for written in [href, nestedHref] {
+    if !written.isEmpty() && !Paths.href(written) { return Err([Docgen.error(Codes.TOC_UNSAFE, path, 1, "unsafe table of contents destination: " + written)]) }
+  }
+  let nested: Array[Docgen.TocItem] = if nestedHref.isEmpty() { [] } else { [Docgen.TocItem{title: "", href: nestedHref, uid: "", expanded: false, children: []}] }
+  Ok(Docgen.TocItem{title: title, href: href, uid: uid, expanded: Meta.flag(&fields, "expanded"), children: nested.concat(children)})
+}

@@ -1,0 +1,46 @@
+/** @Docgen.Site.Sitemap — the crawler map of published pages */
+module PuduLangDocgen.Site.Sitemap
+
+import Std.Glob as Glob
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+
+/** @Docgen.Site.SitemapOptions — site address, defaults, and per-glob settings */
+export type Options = { baseUrl: Str, priority: Str, changefreq: Str, files: Array[(Str, Array[(Str, Docgen.Meta)])] }
+
+/// Change frequencies crawlers understand.
+export const FREQUENCIES: Array[Str] = ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"]
+
+/// The sitemap XML listing every indexable page under the base address. `modified` gives each
+/// page's last change as `YYYY-MM-DD`, when known. Settings of the last matching glob win.
+export fn render(pages: &Array[Docgen.Page], options: &Options, modified: &Array[(Str, Str)]) -> Str {
+  var lines = ["<?xml version=\"1.0\" encoding=\"UTF-8\"?>", "<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">"]
+  for page in *pages {
+    if page.kind == "redirect" || Meta.flag(&page.meta, "_noindex") { continue }
+    var base = options.baseUrl
+    var priority = options.priority
+    var changefreq = options.changefreq
+    for (pattern, settings) in options.files {
+      if Glob.matches(pattern, page.source) || Glob.matches(pattern, page.path) {
+        base = Meta.textOr(&settings, "baseUrl", base)
+        priority = Meta.textOr(&settings, "priority", priority)
+        changefreq = Meta.textOr(&settings, "changefreq", changefreq)
+      }
+    }
+    let address = (if base.endsWith("/") { base } else { base + "/" }) + page.path
+    lines = lines.push("  <url>")
+    lines = lines.push("    <loc>" + escaped(address) + "</loc>")
+    for (path, date) in *modified {
+      if path == page.path && !date.isEmpty() { lines = lines.push("    <lastmod>" + escaped(date) + "</lastmod>") }
+    }
+    if !changefreq.isEmpty() { lines = lines.push("    <changefreq>" + escaped(changefreq) + "</changefreq>") }
+    if !priority.isEmpty() { lines = lines.push("    <priority>" + escaped(priority) + "</priority>") }
+    lines = lines.push("  </url>")
+  }
+  lines.push("</urlset>").join("\n") + "\n"
+}
+
+/// Text escaped for XML content.
+fn escaped(text: Str) -> Str {
+  text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&apos;")
+}

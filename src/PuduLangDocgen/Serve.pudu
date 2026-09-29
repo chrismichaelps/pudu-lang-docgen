@@ -1,0 +1,118 @@
+/** @Docgen.Serve.Seam — a local preview server for a published site folder */
+module PuduLangDocgen.Serve
+
+import Std.Bytes as Bytes
+import Std.Char as Char
+import Std.Fs as Fs
+import Std.Http as Http
+import Std.Http.Server.Reply as Reply
+import Std.Http.Server.Route as Route
+import Std.Http.Server as Server
+import Std.Io as Io
+import Std.Mime as Mime
+import Std.Path as Path
+import PuduLangDocgen.Paths as Paths
+
+/// The site-relative file a request path names: folders name their `index.html`, and paths
+/// that are not portable after percent-decoding name nothing.
+export fn target(path: Str) -> Option[Str] {
+  let decoded = decode(path.split("?")[0].split("#")[0]) ?
+  let trimmed = if decoded.startsWith("/") { decoded.drop(1) } else { decoded }
+  let named = if trimmed.isEmpty() || trimmed.endsWith("/") { trimmed + "index.html" } else { trimmed }
+  if Paths.relative(named) { Some(named) } else { None }
+}
+
+/// A request path with `%XX` escapes decoded as UTF-8, or none when an escape is malformed.
+export fn decode(path: Str) -> Option[Str] {
+  let cs = path.chars()
+  var hex: Array[Str] = []
+  var pieces: Array[Str] = []
+  var index = 0
+  while index < cs.length() {
+    if cs[index] == '%' {
+      if index + 2 >= cs.length() || !Char.isHexDigit(cs[index + 1]) || !Char.isHexDigit(cs[index + 2]) { return None }
+      hex = hex.push(cs[index + 1].toText() + cs[index + 2].toText())
+      index = index + 3
+    } else {
+      if !hex.isEmpty() {
+        pieces = pieces.push(textOf(hex.join("")) ?)
+        hex = []
+      }
+      pieces = pieces.push(cs[index].toText())
+      index = index + 1
+    }
+  }
+  if !hex.isEmpty() { pieces = pieces.push(textOf(hex.join("")) ?) }
+  Some(pieces.join(""))
+}
+
+/// Serves a folder until interrupted, answering the port it listened on.
+export fn serve(root: Str, host: Str, port: Int) -> Result[Int, Str] {
+  let router = Route.withFallback(&Route.router(), |request: Route.Request| answer(root, request.path))
+  let running = match Server.start(host, port) {
+    case Ok(found) => found
+    case Err(problem) => { return Err(show(problem)) }
+  }
+  let _said = Io.writeLine("Serving " + root + " at http://" + (if host == "0.0.0.0" { "localhost" } else { host }) + ":" + show(Server.portOf(&running)) + "/ (press Ctrl+C to stop)")
+  let _signals = Server.stopOnSignal(&running)
+  match Server.run(&Server.server(&router), &running, 0) {
+    case Ok(_) => Ok(Server.portOf(&running))
+    case Err(problem) => Err(show(problem))
+  }
+}
+
+/// The response for a request path: the file, or the site's not-found page.
+export fn answer(root: Str, path: Str) -> Http.Response {
+  match target(path) {
+    case Some(wanted) => {
+      match readable(root, wanted) {
+        case Some(found) => { return respond(found, wanted, 200) }
+        case None => {
+          match readable(root, wanted + "/index.html") {
+            case Some(found) => { return respond(found, "index.html", 200) }
+            case None => {}
+          }
+        }
+      }
+    }
+    case None => {}
+  }
+  match readable(root, "404.html") {
+    case Some(found) => respond(found, "404.html", 404)
+    case None => Reply.text(404, "Not found")
+  }
+}
+
+/// The physical path of a regular file inside the root.
+fn readable(root: Str, file: Str) -> Option[Str] {
+  match Fs.resolveInside(root, file) {
+    case Ok(physical) => match Fs.metadata(physical) {
+      case Ok(details) => if details.isDirectory || details.isSymbolicLink { None } else { Some(physical) }
+      case Err(_) => None
+    }
+    case Err(_) => None
+  }
+}
+
+/// A file's bytes with the media type its extension names.
+fn respond(physical: Str, name: Str, status: Int) -> Http.Response {
+  let extension = match Path.extensionOf(name) {
+    case Some(found) => found
+    case None => ""
+  }
+  match Io.readAllBytes(physical) {
+    case Ok(held) => Reply.bytes(status, Mime.fromExtension(extension), &held)
+    case Err(reason) => Reply.text(500, show(reason))
+  }
+}
+
+/// UTF-8 text of hexadecimal byte pairs.
+fn textOf(hex: Str) -> Option[Str] {
+  match Bytes.decodeHex(hex) {
+    case Ok(held) => match Bytes.toText(&held) {
+      case Ok(found) => Some(found)
+      case Err(_) => None
+    }
+    case Err(_) => None
+  }
+}

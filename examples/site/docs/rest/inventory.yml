@@ -1,0 +1,39 @@
+openapi: 3.0.3
+info:
+  title: Inventory Service
+  version: 1.0.0
+  description: Read and change stock over **HTTP**.
+servers:
+  - url: https://inventory.example.org/v1
+paths:
+  /items/{sku}:
+    get:
+      operationId: getItem
+      summary: Get an item
+      tags: [items]
+      parameters:
+        - name: sku
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The item
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        '404':
+          description: No such item
+components:
+  schemas:
+    Item:
+      type: object
+      required: [sku]
+      properties:
+        sku:
+          type: string
+          description: Stock keeping unit
+        quantity:
+          type: integer

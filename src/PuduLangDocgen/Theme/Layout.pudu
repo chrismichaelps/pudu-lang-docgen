@@ -1,0 +1,162 @@
+/** @Docgen.Theme.Layout — the default page layout and its overridable partials */
+module PuduLangDocgen.Theme.Layout
+
+/// The `layout.html` template.
+const LAYOUT: Array[Str] = [
+  "<!doctype html>",
+  "<html\{\{#lang\}\} lang=\"\{\{lang\}\}\"\{\{/lang\}\} data-root=\"\{\{root\}\}\" data-theme=\"auto\">",
+  "\{\{>head\}\}",
+  "<body class=\"kind-\{\{kind\}\} layout-\{\{layout\}\}\">",
+  "<a class=\"skip-link\" href=\"#main\">\{\{text.skip\}\}</a>",
+  "\{\{^chromeless\}\}\{\{>header\}\}\{\{/chromeless\}\}",
+  "<div class=\"page\">",
+  "\{\{#showToc\}\}\{\{>sidebar\}\}\{\{/showToc\}\}",
+  "<main id=\"main\" class=\"main\" tabindex=\"-1\">",
+  "\{\{#showBreadcrumb\}\}\{\{>breadcrumb\}\}\{\{/showBreadcrumb\}\}",
+  "\{\{>actions\}\}",
+  "<article class=\"content\">",
+  "\{\{\{body\}\}\}",
+  "</article>",
+  "\{\{>pager\}\}",
+  "</main>",
+  "\{\{#showAffix\}\}\{\{>affix\}\}\{\{/showAffix\}\}",
+  "</div>",
+  "\{\{^chromeless\}\}\{\{>footer\}\}\{\{/chromeless\}\}",
+  "\{\{>scripts\}\}",
+  "</body>",
+  "</html>"
+]
+
+/// The `partials/actions.html` template.
+const PARTIAL_ACTIONS: Array[Str] = [
+  "\{\{#hasActions\}\}<div class=\"page-actions\">",
+  "\{\{#lastModified\}\}<span class=\"page-date\">\{\{text.updated\}\} <time datetime=\"\{\{lastModified\}\}\">\{\{lastModified\}\}</time></span>\{\{/lastModified\}\}",
+  "\{\{#editUrl\}\}<a class=\"page-action\" href=\"\{\{editUrl\}\}\"><svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M11.1 1.3a1.5 1.5 0 0 1 2.1 0l1.5 1.5a1.5 1.5 0 0 1 0 2.1l-8.5 8.5-3.7 1.1 1.1-3.7zM4.9 11.2l-.4 1.3 1.3-.4 6.7-6.7-.9-.9z\"/></svg>\{\{text.edit\}\}</a>\{\{/editUrl\}\}",
+  "\{\{#pdfUrl\}\}<a class=\"page-action pdf\" href=\"\{\{pdfUrl\}\}\"><svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M7.25 1h1.5v8.19l2.72-2.72 1.06 1.06L8 12.06 3.47 7.53l1.06-1.06 2.72 2.72zM2 13.5h12V15H2z\"/></svg>\{\{text.pdf\}\}</a>\{\{/pdfUrl\}\}",
+  "</div>\{\{/hasActions\}\}"
+]
+
+/// The `partials/affix.html` template.
+const PARTIAL_AFFIX: Array[Str] = [
+  "<aside class=\"affix\" aria-label=\"\{\{text.inThisArticle\}\}\">",
+  "<div class=\"affix-inner\">",
+  "<h2 class=\"affix-title\">\{\{text.inThisArticle\}\}</h2>",
+  "<ul>\{\{#headings\}\}<li class=\"level-\{\{level\}\}\"><a href=\"#\{\{id\}\}\">\{\{title\}\}</a></li>\{\{/headings\}\}</ul>",
+  "</div>",
+  "</aside>"
+]
+
+/// The `partials/breadcrumb.html` template.
+const PARTIAL_BREADCRUMB: Array[Str] = [
+  "<nav class=\"breadcrumb\" aria-label=\"\{\{text.breadcrumb\}\}\"><ol>\{\{#breadcrumb\}\}<li>\{\{#href\}\}<a href=\"\{\{href\}\}\">\{\{name\}\}</a>\{\{/href\}\}\{\{^href\}\}<span aria-current=\"page\">\{\{name\}\}</span>\{\{/href\}\}</li>\{\{/breadcrumb\}\}</ol></nav>"
+]
+
+/// The `partials/footer.html` template.
+const PARTIAL_FOOTER: Array[Str] = [
+  "<footer class=\"site-footer\">",
+  "<div class=\"footer-inner\">\{\{\{footer\}\}\}</div>",
+  "</footer>"
+]
+
+/// The `partials/head.html` template.
+const PARTIAL_HEAD: Array[Str] = [
+  "<head>",
+  "<meta charset=\"utf-8\">",
+  "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">",
+  "<title>\{\{title\}\}\{\{#siteTitle\}\} | \{\{siteTitle\}\}\{\{/siteTitle\}\}</title>",
+  "<meta name=\"generator\" content=\"pudu-lang-docgen\">",
+  "\{\{#description\}\}<meta name=\"description\" content=\"\{\{description\}\}\">\{\{/description\}\}",
+  "\{\{#keywords\}\}<meta name=\"keywords\" content=\"\{\{keywords\}\}\">\{\{/keywords\}\}",
+  "\{\{#author\}\}<meta name=\"author\" content=\"\{\{author\}\}\">\{\{/author\}\}",
+  "\{\{#noindex\}\}<meta name=\"robots\" content=\"noindex, nofollow\">\{\{/noindex\}\}",
+  "\{\{#canonical\}\}<link rel=\"canonical\" href=\"\{\{canonical\}\}\">\{\{/canonical\}\}",
+  "<meta property=\"og:type\" content=\"\{\{ogType\}\}\">",
+  "<meta property=\"og:title\" content=\"\{\{title\}\}\">",
+  "<meta property=\"og:site_name\" content=\"\{\{siteName\}\}\">",
+  "\{\{#description\}\}<meta property=\"og:description\" content=\"\{\{description\}\}\">\{\{/description\}\}",
+  "\{\{#canonical\}\}<meta property=\"og:url\" content=\"\{\{canonical\}\}\">\{\{/canonical\}\}",
+  "\{\{#image\}\}<meta property=\"og:image\" content=\"\{\{image\}\}\">\{\{/image\}\}",
+  "\{\{#lang\}\}<meta property=\"og:locale\" content=\"\{\{lang\}\}\">\{\{/lang\}\}",
+  "<meta name=\"twitter:card\" content=\"\{\{#image\}\}summary_large_image\{\{/image\}\}\{\{^image\}\}summary\{\{/image\}\}\">",
+  "<meta name=\"twitter:title\" content=\"\{\{title\}\}\">",
+  "\{\{#description\}\}<meta name=\"twitter:description\" content=\"\{\{description\}\}\">\{\{/description\}\}",
+  "\{\{#image\}\}<meta name=\"twitter:image\" content=\"\{\{image\}\}\">\{\{/image\}\}",
+  "\{\{#twitter\}\}<meta name=\"twitter:site\" content=\"\{\{twitter\}\}\">\{\{/twitter\}\}",
+  "\{\{#extraMeta\}\}<meta name=\"\{\{name\}\}\" content=\"\{\{content\}\}\">",
+  "\{\{/extraMeta\}\}",
+  "<meta name=\"color-scheme\" content=\"light dark\">",
+  "\{\{#themeColor\}\}<meta name=\"theme-color\" content=\"\{\{themeColor\}\}\">\{\{/themeColor\}\}",
+  "\{\{#favicon\}\}<link rel=\"icon\" href=\"\{\{favicon\}\}\">\{\{/favicon\}\}",
+  "\{\{#touchIcon\}\}<link rel=\"apple-touch-icon\" href=\"\{\{touchIcon\}\}\">\{\{/touchIcon\}\}",
+  "<link rel=\"stylesheet\" href=\"\{\{root\}\}_assets/site.css\">",
+  "\{\{#customStyle\}\}<link rel=\"stylesheet\" href=\"\{\{customStyle\}\}\">\{\{/customStyle\}\}",
+  "\{\{#structuredData\}\}<script type=\"application/ld+json\">\{\{\{structuredData\}\}\}</script>\{\{/structuredData\}\}",
+  "\{\{#analytics\}\}<script async src=\"https://www.googletagmanager.com/gtag/js?id=\{\{analytics\}\}\"></script>",
+  "<script>window.dataLayer=window.dataLayer||[];function gtag()\{dataLayer.push(arguments)\}gtag(\"js\",new Date());gtag(\"config\",\"\{\{analytics\}\}\");</script>\{\{/analytics\}\}",
+  "<script>try\{var t=localStorage.getItem(\"docgen-theme\");if(t)document.documentElement.setAttribute(\"data-theme\",t)\}catch(e)\{\}</script>",
+  "</head>"
+]
+
+/// The `partials/header.html` template.
+const PARTIAL_HEADER: Array[Str] = [
+  "<header class=\"site-header\">",
+  "<div class=\"header-inner\">",
+  "\{\{#showToc\}\}<button type=\"button\" class=\"icon-button menu-toggle\" aria-controls=\"sidebar\" aria-expanded=\"false\" aria-label=\"\{\{text.menu\}\}\"><svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M1 3h14v1.5H1zm0 4.25h14v1.5H1zM1 11.5h14V13H1z\"/></svg></button>\{\{/showToc\}\}",
+  "<a class=\"brand\" href=\"\{\{logoUrl\}\}\">\{\{#logo\}\}<img class=\"brand-logo\" src=\"\{\{logo\}\}\" alt=\"\" width=\"24\" height=\"24\">\{\{/logo\}\}<span class=\"brand-name\">\{\{siteName\}\}</span></a>",
+  "\{\{#showNavbar\}\}<nav class=\"navbar\" aria-label=\"\{\{text.primary\}\}\"><ul>\{\{#navbar\}\}<li><a href=\"\{\{href\}\}\"\{\{#active\}\} aria-current=\"true\" class=\"active\"\{\{/active\}\}>\{\{name\}\}</a></li>\{\{/navbar\}\}</ul></nav>\{\{/showNavbar\}\}",
+  "<div class=\"header-tools\">",
+  "\{\{#searchEnabled\}\}<div class=\"search\" role=\"search\">",
+  "<svg class=\"search-icon\" viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M6.5 1a5.5 5.5 0 0 1 4.38 8.82l3.65 3.65-1.06 1.06-3.65-3.65A5.5 5.5 0 1 1 6.5 1zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8z\"/></svg>",
+  "<input id=\"search-input\" type=\"search\" placeholder=\"\{\{text.search\}\}\" aria-label=\"\{\{text.search\}\}\" autocomplete=\"off\" spellcheck=\"false\" aria-controls=\"search-results\" aria-expanded=\"false\">",
+  "<div id=\"search-results\" class=\"search-results\" role=\"listbox\" hidden></div>",
+  "</div>\{\{/searchEnabled\}\}",
+  "<button type=\"button\" class=\"icon-button theme-toggle\" aria-label=\"\{\{text.theme\}\}\" title=\"\{\{text.theme\}\}\"><svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1.5v11a5.5 5.5 0 0 1 0-11z\"/></svg></button>",
+  "</div>",
+  "</div>",
+  "</header>"
+]
+
+/// The `partials/pager.html` template.
+const PARTIAL_PAGER: Array[Str] = [
+  "\{\{#hasPager\}\}<nav class=\"pager\" aria-label=\"\{\{text.pager\}\}\">",
+  "\{\{#previous\}\}<a class=\"pager-link previous\" href=\"\{\{href\}\}\" rel=\"prev\"><span class=\"pager-label\">\{\{text.previous\}\}</span><span class=\"pager-title\">\{\{name\}\}</span></a>\{\{/previous\}\}",
+  "\{\{#next\}\}<a class=\"pager-link next\" href=\"\{\{href\}\}\" rel=\"next\"><span class=\"pager-label\">\{\{text.next\}\}</span><span class=\"pager-title\">\{\{name\}\}</span></a>\{\{/next\}\}",
+  "</nav>\{\{/hasPager\}\}"
+]
+
+/// The `partials/scripts.html` template.
+const PARTIAL_SCRIPTS: Array[Str] = [
+  "<script src=\"\{\{root\}\}_assets/site.js\" defer></script>",
+  "\{\{#mermaid\}\}<script src=\"\{\{mermaidScript\}\}\" defer></script>\{\{/mermaid\}\}",
+  "\{\{#math\}\}<script src=\"\{\{mathScript\}\}\" defer></script>\{\{/math\}\}",
+  "\{\{#customScript\}\}<script src=\"\{\{customScript\}\}\" defer></script>\{\{/customScript\}\}"
+]
+
+/// The `partials/sidebar.html` template.
+const PARTIAL_SIDEBAR: Array[Str] = [
+  "<aside id=\"sidebar\" class=\"sidebar\" aria-label=\"\{\{text.contents\}\}\">",
+  "<div class=\"sidebar-inner\">",
+  "\{\{#showTocFilter\}\}<div class=\"toc-filter\"><input type=\"search\" placeholder=\"\{\{text.filter\}\}\" aria-label=\"\{\{text.filter\}\}\" autocomplete=\"off\"></div>\{\{/showTocFilter\}\}",
+  "<nav class=\"toc\" aria-label=\"\{\{text.contents\}\}\">",
+  "\{\{\{toc\}\}\}",
+  "</nav>",
+  "</div>",
+  "</aside>"
+]
+
+/// Template names and texts: `layout` and `partials/<name>`, each replaceable by a file of
+/// the same name in a template folder.
+export fn templates() -> Array[(Str, Str)] {
+  [
+    ("layout", LAYOUT.join("\n")),
+    ("partials/actions", PARTIAL_ACTIONS.join("\n")),
+    ("partials/affix", PARTIAL_AFFIX.join("\n")),
+    ("partials/breadcrumb", PARTIAL_BREADCRUMB.join("\n")),
+    ("partials/footer", PARTIAL_FOOTER.join("\n")),
+    ("partials/head", PARTIAL_HEAD.join("\n")),
+    ("partials/header", PARTIAL_HEADER.join("\n")),
+    ("partials/pager", PARTIAL_PAGER.join("\n")),
+    ("partials/scripts", PARTIAL_SCRIPTS.join("\n")),
+    ("partials/sidebar", PARTIAL_SIDEBAR.join("\n"))
+  ]
+}
