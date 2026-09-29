@@ -1,0 +1,11 @@
+[package]
+name = "@chrismichaelps/pudu-lang-docgen"
+version = "0.1.0"
+description = "Documentation publishing for Pudu: articles, API references, navigation, search, and static websites"
+license = "Apache-2.0"
+keywords = ["documentation", "static-site", "api", "publishing", "pudu"]
+language = ">=0.1.2 <0.2.0"
+source = "src"
+root = "PuduLangDocgen"
+
+[dependencies]
