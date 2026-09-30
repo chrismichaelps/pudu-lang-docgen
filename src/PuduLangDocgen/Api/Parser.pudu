@@ -74,6 +74,7 @@ export fn render(tokens: &Array[Lexer.Token], from: Int, to: Int) -> Str {
   var pieces: Array[Str] = []
   var previous = ""
   for index in from..to {
+    if tokens[index].kind == Lexer.LineDoc || tokens[index].kind == Lexer.BlockDoc { continue }
     let text = tokens[index].text
     let spaced = !pieces.isEmpty() && !TIGHT_BEFORE.contains(text) && !TIGHT_AFTER.contains(previous) && !((text == "(" || text == "[") && previous != "->" && previous != "=" && previous != "|" && previous != "," && previous != ":")
     if spaced { pieces = pieces.push(" ") }
@@ -177,6 +178,7 @@ fn listed(tokens: &Array[Lexer.Token], from: Int, to: Int) -> Array[(Int, Int)] 
   var start = from
   var depth = 0
   for index in from..to {
+    if tokens[index].kind == Lexer.LineDoc || tokens[index].kind == Lexer.BlockDoc { continue }
     let text = tokens[index].text
     if tokens[index].kind == Lexer.Symbol {
       if text == "(" || text == "[" || text == "\{" { depth = depth + 1 }
@@ -268,7 +270,7 @@ fn typeAt(tokens: &Array[Lexer.Token], index: Int, doc: Str, exported: Bool, own
       }
       fieldDoc = ""
     }
-    let written = head + " = " + render(tokens, cursor, close)
+    let written = if fields.length() > 2 { head + " = \{\n" + fields.map(|field: Model.Member| "  " + field.signature).join(",\n") + "\n\}" } else { head + " = " + render(tokens, cursor, close) }
     return (Model.Member{..base, kind: "record", signature: written, members: fields}, close)
   }
   let end = nextStart(tokens, cursor)

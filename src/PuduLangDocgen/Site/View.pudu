@@ -46,7 +46,7 @@ export fn view(page: &Docgen.Page, frame: &Frame) -> Docgen.Meta {
   let showAffix = !plain && !Meta.flag(&meta, "_disableAffix") && page.headings.filter(|found: Docgen.Heading| found.level == 2 || found.level == 3).length() > 1
   let showNavbar = !Meta.flag(&meta, "_disableNavbar") && !frame.navbar.isEmpty()
   let editUrl = if Meta.flag(&meta, "_disableContribution") { "" } else { frame.editUrl }
-  let hidePager = Meta.flag(&meta, "_disableNextArticle")
+  let hidePager = plain || Meta.flag(&meta, "_disableNextArticle")
   let previous = if hidePager { None } else { frame.previous }
   let next = if hidePager { None } else { frame.next }
   let baseUrl = Meta.textOr(&meta, "_baseUrl", "")

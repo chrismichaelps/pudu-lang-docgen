@@ -9,3 +9,4 @@ _site/
 .DS_Store
 .docgen/
 examples/site/_site/
+.claude/

@@ -2,6 +2,7 @@
 module PuduLangDocgen.Api.Signature
 
 import Std.Map as Map
+import Std.Text as Text
 import PuduLangDocgen.Api.Lexer as Lexer
 import PuduLangDocgen.Api.Model as Model
 import PuduLangDocgen as Docgen
@@ -31,7 +32,16 @@ export fn resolve(unit: &Model.Unit, written: Str, references: &Map[Str, Docgen.
 }
 
 /// Declaration HTML for a page: keywords marked, resolvable names linked, the rest escaped.
+/// Line breaks and leading indentation of the declaration are kept.
 export fn html(unit: &Model.Unit, signature: Str, references: &Map[Str, Docgen.Reference], page: Str) -> Str {
+  signature.split("\n").map(fn(line: Str) -> Str {
+      let depth = line.length() - Text.trimStart(line).length()
+      line.take(depth) + lineHtml(unit, line, references, page)
+    }).join("\n")
+}
+
+/// One declaration line as HTML.
+fn lineHtml(unit: &Model.Unit, signature: Str, references: &Map[Str, Docgen.Reference], page: Str) -> Str {
   let tokens = Lexer.tokens(signature)
   var pieces: Array[Str] = []
   var index = 0

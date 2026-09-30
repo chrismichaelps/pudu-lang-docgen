@@ -1,0 +1,51 @@
+/** @Docgen.Scaffold.Module — the files of a new documentation project */
+module PuduLangDocgen.Scaffold
+
+import Std.Json as Json
+import PuduLangDocgen.Yaml as Yaml
+
+/** @Docgen.Scaffold.Answers — choices that shape a new project */
+export type Answers = { title: Str, api: Bool, sources: Str, output: Str, pdf: Bool }
+
+/// Choices used when nothing is asked: a site titled after its folder with an API section.
+export fn defaults(title: Str) -> Answers {
+  Answers{title: if title.isEmpty() { "Documentation" } else { title }, api: true, sources: "src", output: "_site", pdf: false}
+}
+
+/// Every file of a new project by relative path.
+export fn files(answers: &Answers) -> Array[(Str, Str)] {
+  var navigation = [("Home", "index.md"), ("Guide", "docs/")]
+  if answers.api { navigation = navigation.push(("API", "api/")) }
+  var result = [
+    ("docgen.json", config(answers)),
+    ("index.md", "---\ntitle: " + Yaml.scalar(answers.title) + "\n_layout: landing\n---\n\n# " + answers.title + "\n\nWelcome. Start with the [introduction](docs/introduction.md)" + (if answers.api { " or open **API** in the navigation bar." } else { "." }) + "\n"),
+    ("toc.yml", navigation.map(fn(entry: (Str, Str)) -> Str {
+          let (name, href) = entry
+          "- name: " + name + "\n  href: " + href
+        }).join("\n") + "\n"),
+    ("docs/introduction.md", "# Introduction\n\nDescribe what the project does and who it is for.\n\n> [!TIP]\n> Every page is Markdown. Headings build the outline on the right.\n"),
+    ("docs/getting-started.md", "# Getting started\n\n## Install\n\nExplain how to install the project.\n\n## First steps\n\nWalk through a first task.\n"),
+    ("docs/toc.yml", "- name: Introduction\n  href: introduction.md\n- name: Getting started\n  href: getting-started.md\n"),
+    (".gitignore", answers.output + "/\n.docgen/\n")
+  ]
+  if answers.api && answers.sources == "src" {
+    result = result.push(("src/Example.pudu", "/** @Example.Module — replace with the modules to document */\nmodule Example\n\n/// A greeting for a name.\nexport fn greet(name: Str) -> Str \{ \"Hello, \" + name \}\n"))
+  }
+  result
+}
+
+/// The configuration of a new project.
+fn config(answers: &Answers) -> Str {
+  let build = [
+    ("content", Json.list(&[Json.object(&[("files", Json.list(&[Json.Text("**/*.md"), Json.Text("**/toc.yml")])), ("exclude", Json.list(&[Json.Text(answers.output + "/**"), Json.Text("api/**")]))])])),
+    ("resource", Json.list(&[Json.object(&[("files", Json.list(&[Json.Text("images/**")]))])])),
+    ("output", Json.Text(answers.output)),
+    ("template", Json.list(&[Json.Text("default")])),
+    ("globalMetadata", Json.object(&[("_appTitle", Json.Text(answers.title)), ("_appName", Json.Text(answers.title)), ("_enableSearch", Json.Boolean(true)), ("pdf", Json.Boolean(answers.pdf))]))
+  ]
+  var top: Array[(Str, Json.Json)] = []
+  if answers.api {
+    top = top.push(("metadata", Json.list(&[Json.object(&[("src", Json.list(&[Json.object(&[("files", Json.list(&[Json.Text("**/*.pudu")])), ("src", Json.Text(answers.sources))])])), ("dest", Json.Text("api"))])])))
+  }
+  Json.encodePretty(&Json.object(&top.push(("build", Json.object(&build))))) + "\n"
+}

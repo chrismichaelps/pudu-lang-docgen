@@ -42,10 +42,13 @@ jobs:
         run: |
           set -euo pipefail
           for example in examples/*.pudu; do
+            if [ "$example" = "examples/Cli.pudu" ]; then continue; fi
             echo "::group::$example"
             pudu run "$example"
             echo "::endgroup::"
           done
+          pudu run examples/Cli.pudu version
+          pudu run examples/Cli.pudu build examples/site --force
 
   mutation:
     if: github.event_name == 'pull_request' && github.base_ref == 'main'

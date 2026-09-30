@@ -1,12 +1,15 @@
 /** @Docgen.Command.Seam — the command line: build, metadata, serve, help, and version */
 module PuduLangDocgen.Command
 
+import Std.Concurrent as Concurrent
 import Std.Io as Io
 import Std.Path as Path
 import PuduLangDocgen.Build as Build
 import PuduLangDocgen.Constants.Package as Package
 import PuduLangDocgen as Docgen
 import PuduLangDocgen.Docset as Docset
+import PuduLangDocgen.Docset.Tasks as Tasks
+import PuduLangDocgen.Scaffold as Scaffold
 import PuduLangDocgen.Serve as Serve
 
 /** @Docgen.Command.Parsed — a command, its positional arguments, and its options */
@@ -16,14 +19,25 @@ export type Parsed = { command: Str, positional: Array[Str], flags: Array[Str], 
 const VALUED: Array[Str] = ["--output", "-o", "--metadata", "-m", "--xref", "-x", "--template", "-t", "--port", "-p", "--hostname", "-n"]
 
 /// Options that stand alone.
-const FLAGS: Array[Str] = ["--force", "--dryRun", "--warningsAsErrors", "--disableGitFeatures", "--exportRawModel", "--exportViewModel", "--serve", "-s", "--help", "-h"]
+const FLAGS: Array[Str] = ["--force", "--dryRun", "--warningsAsErrors", "--disableGitFeatures", "--exportRawModel", "--exportViewModel", "--serve", "-s", "--watch", "-w", "--yes", "-y", "--all", "-a", "--help", "-h"]
+
+/// Command words.
+const COMMAND_WORDS: Array[Str] = ["build", "metadata", "serve", "init", "pdf", "download", "merge", "template", "version", "help"]
+
+/// Milliseconds between checks for changed sources while watching.
+const WATCH_MILLIS: Int = 1000
 
 /// Commands and what they do, for help text.
 const COMMANDS: Array[(Str, Str)] = [
-  ("[config]", "Extract API metadata and build the site (the default)"),
-  ("build [config]", "Build the site from docgen.json"),
+  ("[config]", "Build the site, API reference included (the default)"),
+  ("build [config]", "The same as the default"),
   ("metadata [config]", "Write API metadata files for the configured sources"),
   ("serve [folder]", "Preview a built site over HTTP"),
+  ("init [folder]", "Create a new documentation project"),
+  ("pdf [config]", "Build the site and a PDF for every table of contents that sets pdf"),
+  ("download <file> --xref <address>", "Save a cross-reference map from the web"),
+  ("merge <maps...> -o <file>", "Combine cross-reference maps into one"),
+  ("template list | export [folder]", "List the built-in templates or copy one for customizing"),
   ("version", "Print the package version"),
   ("help", "Print this help")
 ]
@@ -48,7 +62,11 @@ export fn run(arguments: &Array[Str]) -> Int {
     let _said = Io.writeLine(Package.NAME + " " + Package.VERSION)
     return 0
   }
-  if parsed.command == "serve" { return serve(if parsed.positional.isEmpty() { "_site" } else { parsed.positional[0] }, &parsed) }
+  if parsed.command == "serve" { return serve(if parsed.positional.isEmpty() { "_site" } else { parsed.positional[0] }, &parsed, "") }
+  if parsed.command == "init" { return initialize(&parsed) }
+  if parsed.command == "template" { return template(&parsed) }
+  if parsed.command == "download" { return download(&parsed) }
+  if parsed.command == "merge" { return merge(&parsed) }
   let config = if parsed.positional.isEmpty() { Package.CONFIG_FILE } else { configPath(parsed.positional[0]) }
   let chosen = match options(&parsed) {
     case Ok(found) => found
@@ -57,12 +75,23 @@ export fn run(arguments: &Array[Str]) -> Int {
       return 2
     }
   }
-  if parsed.command == "metadata" || parsed.command == "" {
-    match Docset.metadata(config, &Docset.Options{..chosen, output: if parsed.command == "metadata" { chosen.output } else { "" }}) {
-      case Ok(written) => { for path in written { let _said = Io.writeLine("wrote " + path) } }
-      case Err(problems) => { return failed(&problems) }
+  if parsed.command == "pdf" {
+    return match Docset.pdf(config, &chosen) {
+      case Ok(produced) => {
+        for path in produced { let _said = Io.writeLine("wrote " + path) }
+        0
+      }
+      case Err(problems) => failed(&problems)
     }
-    if parsed.command == "metadata" { return 0 }
+  }
+  if parsed.command == "metadata" {
+    return match Docset.metadata(config, &chosen) {
+      case Ok(written) => {
+        for path in written { let _said = Io.writeLine("wrote " + path) }
+        0
+      }
+      case Err(problems) => failed(&problems)
+    }
   }
   match Docset.build(config, &chosen, &Build.extensions()) {
     case Ok(report) => {
@@ -70,7 +99,7 @@ export fn run(arguments: &Array[Str]) -> Int {
       let _said = Io.writeLine("Build succeeded: " + show(report.written.length()) + " written, " + show(report.unchanged.length()) + " unchanged, " + show(report.removed.length()) + " removed.")
       if parsed.flags.contains("--serve") || parsed.flags.contains("-s") {
         let folder = Path.join(Path.directoryOf(config), if chosen.output.isEmpty() { "_site" } else { chosen.output })
-        return serve(folder, &parsed)
+        return serve(folder, &parsed, config)
       }
       0
     }
@@ -82,7 +111,7 @@ export fn run(arguments: &Array[Str]) -> Int {
 export fn parse(arguments: &Array[Str]) -> Result[Parsed, Str] {
   var parsed = Parsed{command: "", positional: [], flags: [], values: []}
   var index = 0
-  if !arguments.isEmpty() && ["build", "metadata", "serve", "version", "help"].contains(arguments[0]) {
+  if !arguments.isEmpty() && COMMAND_WORDS.contains(arguments[0]) {
     parsed = Parsed{..parsed, command: arguments[0]}
     index = 1
   }
@@ -102,7 +131,8 @@ export fn parse(arguments: &Array[Str]) -> Result[Parsed, Str] {
       index = index + 1
     }
   }
-  if parsed.positional.length() > 1 { return Err("expected at most one path, found " + parsed.positional.join(" ")) }
+  let most = if parsed.command == "merge" { 1000 } else if parsed.command == "template" { 2 } else { 1 }
+  if parsed.positional.length() > most { return Err("expected at most " + show(most) + " path" + (if most == 1 { "" } else { "s" }) + ", found " + parsed.positional.join(" ")) }
   Ok(parsed)
 }
 
@@ -123,6 +153,8 @@ export fn usage() -> Str {
       "  --exportRawModel             Write each page's data model beside it",
       "  --exportViewModel            Write each page's view model beside it",
       "  -s, --serve                  Preview the site after building",
+      "  -w, --watch                  Rebuild while serving when sources change",
+      "  -y, --yes                    Accept every default when creating a project",
       "  -n, --hostname <host>        Preview host (localhost)",
       "  -p, --port <number>          Preview port (8080)",
       "  -h, --help                   Print this help"
@@ -160,8 +192,9 @@ fn configPath(written: Str) -> Str {
   if written.endsWith(".json") || written.endsWith(".yml") || written.endsWith(".yaml") { written } else { Path.join(written, Package.CONFIG_FILE) }
 }
 
-/// Serves a folder with the host and port options, answering an exit status.
-fn serve(folder: Str, parsed: &Parsed) -> Int {
+/// Serves a folder with the host and port options, answering an exit status. With `--watch`
+/// and a configuration, the site is rebuilt whenever a source changes.
+fn serve(folder: Str, parsed: &Parsed, config: Str) -> Int {
   var host = "localhost"
   var port = PORT
   for (name, value) in parsed.values {
@@ -174,6 +207,31 @@ fn serve(folder: Str, parsed: &Parsed) -> Int {
           return 2
         }
       }
+    }
+  }
+  if !config.isEmpty() && (parsed.flags.contains("--watch") || parsed.flags.contains("-w")) {
+    let chosen = match options(parsed) {
+      case Ok(found) => found
+      case Err(_) => Docset.options()
+    }
+    let output = if chosen.output.isEmpty() { "_site" } else { chosen.output }
+    let started = Concurrent.start(fn() -> () {
+        var seen = Docset.fingerprint(config, output)
+        while true {
+          let _paused = Concurrent.sleep(WATCH_MILLIS)
+          let current = Docset.fingerprint(config, output)
+          if current != seen {
+            seen = current
+            match Docset.build(config, &chosen, &Build.extensions()) {
+              case Ok(report) => { let _said = Io.writeLine("Rebuilt: " + show(report.written.length()) + " written, " + show(report.removed.length()) + " removed.") }
+              case Err(problems) => { for problem in problems { let _said = Io.writeErrorLine(Docgen.describe(&problem)) } }
+            }
+          }
+        }
+      })
+    match started {
+      case Ok(_) => { let _said = Io.writeLine("Watching " + config + " for changes") }
+      case Err(_) => { let _said = Io.writeErrorLine("cannot watch for changes; serving without rebuilding") }
     }
   }
   match Serve.serve(folder, host, port) {
@@ -189,6 +247,99 @@ fn serve(folder: Str, parsed: &Parsed) -> Int {
 fn failed(problems: &Array[Docgen.Diagnostic]) -> Int {
   for problem in *problems { let _said = Io.writeErrorLine(Docgen.describe(&problem)) }
   let errors = problems.filter(|problem: Docgen.Diagnostic| problem.severity == Docgen.Error).length()
-  let _summary = Io.writeErrorLine("Build failed with " + show(errors) + " error(s).")
+  let _summary = Io.writeErrorLine("Failed with " + show(errors) + " error(s) and " + show(problems.length() - errors) + " warning(s).")
   1
+}
+
+/// Creates a project, asking for a title and API sources unless `--yes` accepts defaults.
+fn initialize(parsed: &Parsed) -> Int {
+  let folder = if parsed.positional.isEmpty() { "." } else { parsed.positional[0] }
+  let name = Path.nameOf(if folder == "." { Path.directoryOf(Path.join(folder, "x")) } else { folder })
+  var answers = Scaffold.defaults(name)
+  if !parsed.flags.contains("--yes") && !parsed.flags.contains("-y") {
+    answers = Scaffold.Answers{..answers, title: ask("Site title", answers.title)}
+    let api = ask("Document Pudu sources (yes/no)", "yes")
+    answers = Scaffold.Answers{..answers, api: api.toLower().startsWith("y")}
+    if answers.api { answers = Scaffold.Answers{..answers, sources: ask("Source folder", answers.sources)} }
+    answers = Scaffold.Answers{..answers, pdf: ask("Enable PDF (yes/no)", "no").toLower().startsWith("y")}
+  }
+  match Tasks.init(folder, &answers) {
+    case Ok(written) => {
+      for path in written { let _said = Io.writeLine("created " + path) }
+      let _next = Io.writeLine("Run: docgen " + (if folder == "." { "" } else { folder + " " }) + "--serve")
+      0
+    }
+    case Err(problems) => failed(&problems)
+  }
+}
+
+/// An answer read from the console, or the default for an empty line.
+fn ask(question: Str, fallback: Str) -> Str {
+  let _asked = Io.writeLine(question + " [" + fallback + "]: ")
+  match Io.readLineOrEnd() {
+    case Ok(Some(line)) => if line.trim().isEmpty() { fallback } else { line.trim() }
+    case _ => fallback
+  }
+}
+
+/// Lists built-in templates or exports the default one into a folder.
+fn template(parsed: &Parsed) -> Int {
+  let action = if parsed.positional.isEmpty() { "list" } else { parsed.positional[0] }
+  if action == "list" {
+    let _said = Io.writeLine("default\nmodern")
+    return 0
+  }
+  if action != "export" {
+    let _said = Io.writeErrorLine("template expects list or export")
+    return 2
+  }
+  let folder = if parsed.positional.length() > 1 { parsed.positional[1] } else { valueOf(parsed, "--output", "_exported_templates/default") }
+  match Tasks.exportTemplate(folder) {
+    case Ok(written) => {
+      for path in written { let _said = Io.writeLine("wrote " + Path.join(folder, path)) }
+      0
+    }
+    case Err(problems) => failed(&problems)
+  }
+}
+
+/// Saves a cross-reference map named by `--xref` into a file.
+fn download(parsed: &Parsed) -> Int {
+  let address = valueOf(parsed, "--xref", "")
+  if parsed.positional.isEmpty() || address.isEmpty() {
+    let _said = Io.writeErrorLine("download needs a file and --xref <address>")
+    return 2
+  }
+  match Tasks.download(address, parsed.positional[0]) {
+    case Ok(count) => {
+      let _said = Io.writeLine("saved " + show(count) + " references to " + parsed.positional[0])
+      0
+    }
+    case Err(problems) => failed(&problems)
+  }
+}
+
+/// Combines cross-reference maps into the `--output` file.
+fn merge(parsed: &Parsed) -> Int {
+  let file = valueOf(parsed, "--output", "")
+  if parsed.positional.isEmpty() || file.isEmpty() {
+    let _said = Io.writeErrorLine("merge needs maps and --output <file>")
+    return 2
+  }
+  match Tasks.merge(&parsed.positional, file) {
+    case Ok(count) => {
+      let _said = Io.writeLine("merged " + show(count) + " references into " + file)
+      0
+    }
+    case Err(problems) => failed(&problems)
+  }
+}
+
+/// The value of an option, or the fallback.
+fn valueOf(parsed: &Parsed, name: Str, fallback: Str) -> Str {
+  var found = fallback
+  for (key, value) in parsed.values {
+    if key == name { found = value }
+  }
+  found
 }

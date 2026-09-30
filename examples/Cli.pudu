@@ -1,0 +1,8 @@
+/** @Example.Cli.Program — the docgen command line as a runnable program */
+module Cli
+
+import Std.Env as Env
+import PuduLangDocgen.Command as Command
+
+/// Runs `docgen` with the program's arguments and answers its exit status.
+fn main() -> Int { Command.run(&Env.all()) }

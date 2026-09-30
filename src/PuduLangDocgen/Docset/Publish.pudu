@@ -31,11 +31,8 @@ export fn publish(root: Str, plan: &Docgen.Plan, state: Str, force: Bool) -> Res
       unchanged = unchanged.push(artifact.path)
       continue
     }
-    ready(target) ?
-    match Fs.writeTextAtomically(target, artifact.content) {
-      case Ok(_) => { written = written.push(artifact.path) }
-      case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, artifact.path, 1, show(reason))]) }
-    }
+    place(target, artifact.content) ?
+    written = written.push(artifact.path)
   }
   for resource in plan.resources {
     let hash = Bytes.encodeHex(&Crypto.sha512(&resource.content))
@@ -46,11 +43,8 @@ export fn publish(root: Str, plan: &Docgen.Plan, state: Str, force: Bool) -> Res
       unchanged = unchanged.push(resource.path)
       continue
     }
-    ready(target) ?
-    match Fs.writeAtomically(target, &resource.content) {
-      case Ok(_) => { written = written.push(resource.path) }
-      case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, resource.path, 1, show(reason))]) }
-    }
+    placeBytes(target, &resource.content) ?
+    written = written.push(resource.path)
   }
   var removed: Array[Str] = []
   for path in Map.keys(&previous) {
@@ -67,12 +61,42 @@ export fn publish(root: Str, plan: &Docgen.Plan, state: Str, force: Bool) -> Res
     }
   }
   let record = Json.encodePretty(&Json.object(&[("files", Meta.toJson(&Docgen.Fields(hashes)))]))
-  ready(state) ?
-  match Fs.writeTextAtomically(state, record) {
-    case Ok(_) => {}
-    case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, state, 1, show(reason))]) }
-  }
+  place(state, record) ?
   Ok(Docgen.Report{written: written, unchanged: unchanged, removed: removed, diagnostics: plan.diagnostics})
+}
+
+/// A text file replaced in one step: written beside its target with the usual file mode, then
+/// renamed over it, so readers never see a partial file. The folder is created when missing.
+export fn place(path: Str, text: Str) -> Result[(), Array[Docgen.Diagnostic]] {
+  ready(path) ?
+  let staging = path + ".docgen-partial"
+  match Io.write(staging, text) {
+    case Ok(_) => {}
+    case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, path, 1, reason)]) }
+  }
+  settle(staging, path)
+}
+
+/// A binary file replaced in one step, like `place`.
+export fn placeBytes(path: Str, content: &Bytes) -> Result[(), Array[Docgen.Diagnostic]] {
+  ready(path) ?
+  let staging = path + ".docgen-partial"
+  match Io.writeAllBytes(staging, content) {
+    case Ok(_) => {}
+    case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, path, 1, show(reason))]) }
+  }
+  settle(staging, path)
+}
+
+/// A staged file moved over its target.
+fn settle(staging: Str, path: Str) -> Result[(), Array[Docgen.Diagnostic]] {
+  match Fs.rename(staging, path) {
+    case Ok(_) => Ok(())
+    case Err(reason) => {
+      let _cleaned = Io.remove(staging)
+      Err([Docgen.error(Codes.PUBLISH_FAILED, path, 1, show(reason))])
+    }
+  }
 }
 
 /// Hashes recorded by the previous build; a missing or unreadable record means none.

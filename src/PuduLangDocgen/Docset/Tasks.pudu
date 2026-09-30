@@ -1,0 +1,152 @@
+/** @Docgen.Docset.Tasks — project scaffolding, template export, printing, and reference maps */
+module PuduLangDocgen.Docset.Tasks
+
+import Std.Env as Env
+import Std.Fs as Fs
+import Std.Io as Io
+import Std.List as List
+import Std.Path as Path
+import Std.Process as Process
+import PuduLangDocgen.Build as Build
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen.Constants.Package as Package
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Docset.Publish as Publish
+import PuduLangDocgen.Docset.Tools as Tools
+import PuduLangDocgen.Docset.Walk as Walk
+import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.References as References
+import PuduLangDocgen.Scaffold as Scaffold
+import PuduLangDocgen.Site.Print as Print
+import PuduLangDocgen.Theme.Layout as Layout
+import PuduLangDocgen.Theme as Theme
+
+/// Browsers tried, in order, when no renderer is configured.
+const BROWSERS: Array[Str] = [
+  "chromium", "chromium-browser", "google-chrome", "google-chrome-stable", "microsoft-edge", "msedge",
+  "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome", "/Applications/Chromium.app/Contents/MacOS/Chromium",
+  "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge"
+]
+
+/// Longest a renderer may take for one document unless `DOCGEN_PDF_TIMEOUT` says otherwise.
+const PDF_MILLIS: Int = 120000
+
+/// A new project written into a folder; a folder that already holds a configuration is left alone.
+export fn init(folder: Str, answers: &Scaffold.Answers) -> Result[Array[Str], Array[Docgen.Diagnostic]] {
+  if Io.exists(Path.join(folder, Package.CONFIG_FILE)) { return Err([Docgen.error(Codes.CONFIG_INVALID, Path.join(folder, Package.CONFIG_FILE), 1, "a project already exists here")]) }
+  var written: Array[Str] = []
+  for (path, text) in Scaffold.files(answers) {
+    let target = Path.join(folder, path)
+    if Io.exists(target) { continue }
+    write(target, text) ?
+    written = written.push(path)
+  }
+  Ok(written)
+}
+
+/// The default layout, partials, and assets written into a folder for customization.
+export fn exportTemplate(folder: Str) -> Result[Array[Str], Array[Docgen.Diagnostic]] {
+  var written: Array[Str] = []
+  for (name, text) in Layout.templates() {
+    let path = name + ".html"
+    write(Path.join(folder, path), text) ?
+    written = written.push(path)
+  }
+  for asset in Theme.assets() {
+    let path = "reference/" + Path.nameOf(asset.path)
+    write(Path.join(folder, path), asset.content) ?
+    written = written.push(path)
+  }
+  write(Path.join(folder, "public/main.css"), "/* Styles loaded after the default site styles. */\n") ?
+  write(Path.join(folder, "public/main.js"), "/* Behavior loaded after the default site script. */\n") ?
+  Ok(written.push("public/main.css").push("public/main.js"))
+}
+
+/// Printable documents for every table that sets `pdf`, published and then rendered to PDF.
+export fn pdf(base: Str, built: &Build.Built, output: Str, renderer: &Array[Str]) -> Result[Array[Str], Array[Docgen.Diagnostic]] {
+  let root = Path.join(base, output)
+  let documents = Print.documents(&built.pages, &built.books)
+  if documents.isEmpty() { return Err([Docgen.error(Codes.TOOL_FAILED, "toc.yml", 1, "no table of contents sets pdf: true")]) }
+  let command = if renderer.isEmpty() { detect() } else { *renderer }
+  if command.isEmpty() { return Err([Docgen.error(Codes.TOOL_FAILED, "pdf", 1, "no PDF renderer found; install Chromium or Chrome, or set pdf.renderer with \{input\} and \{output\}")]) }
+  let limit = match Env.variable("DOCGEN_PDF_TIMEOUT") {
+    case Some(written) => match written.toInt() { case Some(found) => found case None => PDF_MILLIS }
+    case None => PDF_MILLIS
+  }
+  var produced: Array[Str] = []
+  for document in documents {
+    let input = Path.join(root, document.path)
+    let target = Path.join(root, document.pdf)
+    write(input, document.html) ?
+    let header = Path.join(root, document.path + ".header.html")
+    let footer = Path.join(root, document.path + ".footer.html")
+    write(header, if document.header.isEmpty() { "<div></div>" } else { document.header }) ?
+    write(footer, document.footer) ?
+    let arguments = command.slice(1, command.length()).map(|part: Str| part.replace("\{input\}", input).replace("\{output\}", target).replace("\{header\}", header).replace("\{footer\}", footer).replace("\{url\}", "file://" + input))
+    match Process.within(command[0], &arguments, limit) {
+      case Ok(Some(finished)) => {
+        if finished.status != 0 || !Io.exists(target) { return Err([Docgen.error(Codes.TOOL_FAILED, document.pdf, 1, "renderer failed: " + finished.errors.trim())]) }
+      }
+      case Ok(None) => { return Err([Docgen.error(Codes.TOOL_FAILED, document.pdf, 1, "renderer took longer than " + show(limit) + " ms")]) }
+      case Err(reason) => { return Err([Docgen.error(Codes.TOOL_FAILED, document.pdf, 1, "renderer could not start: " + reason)]) }
+    }
+    let _cleaned = [Io.remove(header), Io.remove(footer)]
+    produced = produced.push(document.pdf)
+  }
+  Ok(produced)
+}
+
+/// A cross-reference map saved from a web address after checking that it reads.
+export fn download(address: Str, file: Str) -> Result[Int, Array[Docgen.Diagnostic]] {
+  let text = match Tools.fetch(address) {
+    case Ok(found) => found
+    case Err(reason) => { return Err([Docgen.error(Codes.XREF_UNAVAILABLE, address, 1, reason)]) }
+  }
+  let read = match References.parse(address, text) {
+    case Ok(found) => found
+    case Err(reason) => { return Err([Docgen.error(Codes.XREF_UNAVAILABLE, address, 1, reason)]) }
+  }
+  write(file, if file.toLower().endsWith(".json") { References.toJson(&read, "") } else { References.toYaml(&read, "") }) ?
+  Ok(read.length())
+}
+
+/// Cross-reference maps read from files or web addresses and written as one; the first map
+/// to declare an identity keeps it.
+export fn merge(sources: &Array[Str], file: Str) -> Result[Int, Array[Docgen.Diagnostic]] {
+  var found: Array[Docgen.Reference] = []
+  for source in *sources {
+    let text = if Paths.remote(source) { Tools.fetch(source) } else { Io.read(source) }
+    match text {
+      case Ok(held) => match References.parse(source, held) {
+        case Ok(read) => { found = found.concat(read) }
+        case Err(reason) => { return Err([Docgen.error(Codes.XREF_UNAVAILABLE, source, 1, reason)]) }
+      }
+      case Err(reason) => { return Err([Docgen.error(Codes.XREF_UNAVAILABLE, source, 1, reason)]) }
+    }
+  }
+  var kept: Array[Docgen.Reference] = []
+  var seen: Array[Str] = []
+  for reference in found {
+    if !seen.contains(reference.uid) {
+      kept = kept.push(reference)
+      seen = seen.push(reference.uid)
+    }
+  }
+  let ordered = List.sortBy(&kept, |left: Docgen.Reference, right: Docgen.Reference| left.uid < right.uid)
+  write(file, if file.toLower().endsWith(".json") { References.toJson(&ordered, "") } else { References.toYaml(&ordered, "") }) ?
+  Ok(ordered.length())
+}
+
+/// A text file written in one step with its folder created.
+fn write(path: Str, text: Str) -> Result[(), Array[Docgen.Diagnostic]] { Publish.place(path, text) }
+
+/// A renderer command for the first installed browser, or none.
+fn detect() -> Array[Str] {
+  for browser in BROWSERS {
+    if Process.isAvailable(browser) || (browser.startsWith("/") && Io.exists(browser)) {
+      return [browser, "--headless=new", "--disable-gpu", "--no-pdf-header-footer", "--print-to-pdf=\{output\}", "\{url\}"]
+    }
+  }
+  if Process.isAvailable("wkhtmltopdf") { return ["wkhtmltopdf", "--enable-local-file-access", "--print-media-type", "--header-html", "\{header\}", "--footer-html", "\{footer\}", "\{input\}", "\{output\}"] }
+  []
+}

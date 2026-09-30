@@ -1,0 +1,126 @@
+/** @Docgen.Site.Print — printable documents assembled from tables of contents */
+module PuduLangDocgen.Site.Print
+
+import Std.Map as Map
+import PuduLangDocgen.Build.Site as Site
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Navigation.Resolve as Resolve
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Site.Printable — one document to print and the settings of its table */
+export type Printable = { html: Str, path: Str, pdf: Str, header: Str, footer: Str, background: Bool }
+
+/// Footer used when a table names none: the page number over the page count.
+export const FOOTER: Str = "<div style=\"width: 100%; font-size: 12px;\"><div style=\"float: right; padding: 0 2em\"><span class=\"pageNumber\"></span> / <span class=\"totalPages\"></span></div></div>"
+
+/// A printable document for every table of contents whose metadata sets `pdf`. Each lists its
+/// pages in reading order after an optional cover (`pdfCoverPage`) and contents page
+/// (`pdfTocPage`); `pdfFileName` names the output beside the table.
+export fn documents(pages: &Array[Docgen.Page], books: &Array[Site.Book]) -> Array[Printable] {
+  var byPath: Map[Str, Docgen.Page] = mapOf([])
+  for page in *pages { byPath = Map.insert(&byPath, page.path, page) }
+  var result: Array[Printable] = []
+  for book in *books {
+    if !Meta.flag(&book.meta, "pdf") { continue }
+    let pdf = Site.pdfOf(&book)
+    let path = pdf.replace(".pdf", "") + ".print.html"
+    var included: Array[Docgen.Page] = []
+    for item in Resolve.readingOrder(&book.items) {
+      match Map.get(&byPath, Paths.pathOf(item.href)) {
+        case Some(page) => { if !included.contains(page) { included = included.push(page) } }
+        case None => {}
+      }
+    }
+    var numbers: Map[Str, Int] = mapOf([])
+    var index = 0
+    for page in included {
+      numbers = Map.insert(&numbers, page.path, index)
+      index = index + 1
+    }
+    var pieces: Array[Str] = []
+    let cover = Meta.textOr(&book.meta, "pdfCoverPage", "")
+    match Map.get(&byPath, cover) {
+      case Some(page) => { pieces = pieces.push("<section class=\"print-cover\">" + rebase(page.body, page.path, path, &numbers, "cover-") + "</section>") }
+      case None => {}
+    }
+    if Meta.flag(&book.meta, "pdfTocPage") {
+      let entries = included.map(fn(page: Docgen.Page) -> Str {
+          "<li><a href=\"#page-" + show(Map.getOr(&numbers, page.path, 0)) + "\">" + Paths.escape(page.title) + "</a><span class=\"spacer\"></span><span class=\"page-number\"></span></li>"
+        })
+      pieces = pieces.push("<section class=\"pdftoc print-section\"><h1>Table of Contents</h1><ul>" + entries.join("") + "</ul></section>")
+    }
+    for page in included {
+      let number = show(Map.getOr(&numbers, page.path, 0))
+      pieces = pieces.push("<section class=\"print-section\" id=\"page-" + number + "\">" + rebase(page.body, page.path, path, &numbers, "p" + number + "-") + "</section>")
+    }
+    let title = Meta.textOr(&book.meta, "_appTitle", Meta.textOr(&book.meta, "_appName", "Documentation"))
+    let background = Meta.flag(&book.meta, "pdfPrintBackground")
+    let html = [
+      "<!doctype html>", "<html" + lang(&book.meta) + ">", "<head>", "<meta charset=\"utf-8\">", "<title>" + Paths.escape(title) + "</title>",
+      "<link rel=\"stylesheet\" href=\"" + Paths.rootOf(path) + "_assets/site.css\">",
+      if background { "<style>* \{ print-color-adjust: exact; -webkit-print-color-adjust: exact; \}</style>" } else { "" },
+      "</head>", "<body class=\"print\">", "<main class=\"content\">", pieces.join("\n"), "</main>", "</body>", "</html>"
+    ].join("\n") + "\n"
+    result = result.push(Printable{html: html, path: path, pdf: pdf, header: Meta.textOr(&book.meta, "pdfHeaderTemplate", ""), footer: Meta.textOr(&book.meta, "pdfFooterTemplate", FOOTER), background: background})
+  }
+  result
+}
+
+/// The `lang` attribute of a document, when metadata names a language.
+fn lang(meta: &Array[(Str, Docgen.Meta)]) -> Str {
+  let written = Meta.textOr(meta, "_lang", "")
+  if written.isEmpty() { "" } else { " lang=\"" + Paths.escape(written) + "\"" }
+}
+
+/// Page HTML moved into a printed document: ids gain a prefix, links to pages in the document
+/// become section links, and other relative addresses are rebased to the document.
+export fn rebase(body: Str, page: Str, document: Str, numbers: &Map[Str, Int], prefix: Str) -> Str {
+  var pieces: Array[Str] = []
+  var rest = body
+  while !rest.isEmpty() {
+    let at = next(rest)
+    if at < 0 {
+      pieces = pieces.push(rest)
+      break
+    }
+    let marker = if rest.drop(at).startsWith(" id=\"") { " id=\"" } else if rest.drop(at).startsWith(" href=\"") { " href=\"" } else { " src=\"" }
+    let start = at + marker.length()
+    let end = rest.drop(start).indexOf("\"")
+    if end < 0 {
+      pieces = pieces.push(rest)
+      break
+    }
+    let value = rest.drop(start).take(end)
+    let changed = if marker == " id=\"" { prefix + value } else { address(value, page, document, numbers, prefix) }
+    pieces = pieces.push(rest.take(start) + changed + "\"")
+    rest = rest.drop(start + end + 1)
+  }
+  pieces.join("")
+}
+
+/// The index of the next id, href, or src attribute, or -1.
+fn next(text: Str) -> Int {
+  var best = -1
+  for marker in [" id=\"", " href=\"", " src=\""] {
+    let found = text.indexOf(marker)
+    if found >= 0 && (best < 0 || found < best) { best = found }
+  }
+  best
+}
+
+/// An address moved from a page to a printed document.
+fn address(value: Str, page: Str, document: Str, numbers: &Map[Str, Int], prefix: Str) -> Str {
+  let decoded = value.replace("&amp;", "&")
+  if decoded.startsWith("#") { return "#" + prefix + decoded.drop(1) }
+  if Paths.remote(decoded) || decoded.startsWith("data:") || !Paths.href(decoded) { return value }
+  let target = match Paths.join(Paths.directoryOf(page), Paths.pathOf(decoded)) {
+    case Ok(found) => found
+    case Err(_) => { return value }
+  }
+  let fragment = if decoded.contains("#") { decoded.split("#")[1] } else { "" }
+  match Map.get(numbers, target) {
+    case Some(number) => "#" + (if fragment.isEmpty() { "page-" + show(number) } else { "p" + show(number) + "-" + fragment })
+    case None => Paths.escape(Paths.between(document, target) + Paths.suffixOf(decoded))
+  }
+}

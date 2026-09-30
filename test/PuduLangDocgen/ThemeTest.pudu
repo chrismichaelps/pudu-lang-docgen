@@ -3,8 +3,10 @@ module PuduLangDocgen.ThemeTest
 
 import Std.Io as Io
 import Std.Test as Test
+import PuduLangDocgen.Build.Site as Site
 import PuduLangDocgen.Constants.Codes as Codes
 import PuduLangDocgen as Docgen
+import PuduLangDocgen.Site.Print as Print
 import PuduLangDocgen.Site.Redirect as Redirect
 import PuduLangDocgen.Site.Search as Search
 import PuduLangDocgen.Site.Sitemap as Sitemap
@@ -45,6 +47,9 @@ fn main() -> Int {
     case Ok(_) => []
     case Err(found) => found.map(|problem: Docgen.Diagnostic| problem.code)
   }
+  let cover = Docgen.Page{..page([]), path: "cover.html", body: "<h1>Cover</h1>"}
+  let book = Site.Book{output: "guide/toc.json", items: [Docgen.TocItem{title: "Alpha", href: "guide/a.html", uid: "", expanded: false, children: []}], meta: [("pdf", Docgen.Flag(true)), ("pdfTocPage", Docgen.Flag(true)), ("pdfCoverPage", Docgen.Text("cover.html")), ("pdfFileName", Docgen.Text("manual.pdf"))], nested: false}
+  let printed = Print.documents(&[page([]), cover], &[book])
   let checks = Test.suite("Theme", &[
       Test.equals("assets", &Theme.assets().map(|artifact: Docgen.Artifact| artifact.path), &["_assets/site.css", "_assets/site.js"]),
       Test.that("stylesheet has both schemes and print", Theme.assets()[0].content.contains("[data-theme=\"dark\"]") && Theme.assets()[0].content.contains("@media print")),
@@ -72,6 +77,9 @@ fn main() -> Int {
       Test.equals("plain text", &Search.plainText("<p>a &amp; <b>b</b></p><script>x()</script><button>Copy</button> c"), &"a & b c"),
       Test.that("search skips hidden pages", !Search.index(&[page([("_noindex", Docgen.Flag(true))])]).contains("guide/a.html") && Search.index(&[page([])]).contains("\"title\":\"Alpha <1>\"")),
       Test.equals("sitemap", &Sitemap.render(&[page([])], &Sitemap.Options{baseUrl: "https://docs.example", priority: "0.5", changefreq: "daily", files: [("docs/guide/**", [("priority", Docgen.Text("0.9"))])]}, &[("guide/a.html", "2026-09-01")]), &"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n  <url>\n    <loc>https://docs.example/guide/a.html</loc>\n    <lastmod>2026-09-01</lastmod>\n    <changefreq>daily</changefreq>\n    <priority>0.9</priority>\n  </url>\n</urlset>\n"),
+      Test.equals("print rebasing", &Print.rebase("<h2 id=\"a\">A</h2><a href=\"#a\">x</a><a href=\"b.html#k\">y</a><a href=\"other.html\">z</a><img src=\"../img/p.png\"><a href=\"https://e.x/\">w</a>", "guide/a.html", "guide/toc.print.html", &mapOf([("guide/a.html", 0), ("guide/b.html", 1)]), "p0-"), &"<h2 id=\"p0-a\">A</h2><a href=\"#p0-a\">x</a><a href=\"#p1-k\">y</a><a href=\"other.html\">z</a><img src=\"../img/p.png\"><a href=\"https://e.x/\">w</a>"),
+      Test.that("print documents", printed.length() == 1 && printed[0].pdf == "guide/manual.pdf" && printed[0].path == "guide/manual.print.html" && printed[0].html.contains("class=\"pdftoc print-section\"") && printed[0].html.contains("<section class=\"print-cover\">") && printed[0].html.contains("id=\"page-0\"") && printed[0].footer == Print.FOOTER),
+      Test.equals("tables without pdf print nothing", &Print.documents(&[page([])], &[Site.Book{output: "toc.json", items: [], meta: [], nested: false}]).length(), &0),
       Test.that("redirect", Redirect.page("Old", "new.html?a=1&b=2").contains("<meta http-equiv=\"refresh\" content=\"0; url=new.html?a=1&amp;b=2\">"))
     ])
   let ran = Test.run(&checks)
