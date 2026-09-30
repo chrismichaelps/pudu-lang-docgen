@@ -59,7 +59,7 @@ Every build publishes `xrefmap.yml` at the root of the site. It lists each uid w
 ```yaml
 ### YamlMime:XRefMap
 sorted: true
-baseUrl: https://pudu-lang-docgen.vercel.app
+baseUrl: https://www.pudu-lang-docgen.com
 references:
 - uid: PuduLangDocgen.Docset.build
   name: build
@@ -72,7 +72,7 @@ To link to another site's identities, list its map in `build.xref`. Entries may 
 
 ```json
 "xref": [
-  "https://pudu-lang-docgen.vercel.app/xrefmap.yml",
+  "https://www.pudu-lang-docgen.com/xrefmap.yml",
   "maps/partner.json"
 ]
 ```

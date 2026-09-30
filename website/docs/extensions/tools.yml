@@ -87,4 +87,4 @@ items:
   repository:
     url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/References.pudu
   usage:
-    command: docgen download maps/site.yml --xref https://pudu-lang-docgen.vercel.app/xrefmap.yml
+    command: docgen download maps/site.yml --xref https://www.pudu-lang-docgen.com/xrefmap.yml

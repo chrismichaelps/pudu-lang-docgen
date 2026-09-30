@@ -1,7 +1,7 @@
 # pudu-lang-docgen website
 
 The documentation website of pudu-lang-docgen, built with pudu-lang-docgen. It is published at
-<https://pudu-lang-docgen.vercel.app>.
+<https://www.pudu-lang-docgen.com>.
 
 | Path | Contents |
 | --- | --- |

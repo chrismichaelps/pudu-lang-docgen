@@ -23,7 +23,7 @@ It fails with `DG904` when the map cannot be fetched or read, and exits with sta
 ## Example
 
 ```bash
-pudu run Docgen.pudu download maps/docgen.yml --xref https://pudu-lang-docgen.vercel.app/xrefmap.yml
+pudu run Docgen.pudu download maps/docgen.yml --xref https://www.pudu-lang-docgen.com/xrefmap.yml
 ```
 
 Then list the file in the configuration:
