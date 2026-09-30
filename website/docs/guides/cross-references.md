@@ -79,4 +79,19 @@ To link to another site's identities, list its map in `build.xref`. Entries may 
 
 Identities declared by the site itself take precedence over identities from maps. A map that cannot be fetched or read is reported as `DG904`.
 
+### Reference services
+
+A reference service answers questions about single identities. List its address in
+`build.xrefService`, with `{uid}` where the identity goes:
+
+```json
+"xrefService": ["https://xref.example.com/query?uid={uid}"]
+```
+
+The build first renders the site without the services. For every identity still unresolved, it
+asks the services in order, replacing `{uid}` with the percent-encoded identity, and keeps the
+first reference whose `uid` matches. An answer is a JSON list of references with the same fields
+as a map entry, or a whole map. A service that fails is reported once as `DG904` and not asked
+again during that build; its identities stay unresolved warnings.
+
 The [download](commands/download.md) and [merge](commands/merge.md) commands save a remote map locally and combine several maps into one, which keeps builds independent of the network.

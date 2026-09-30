@@ -34,6 +34,7 @@ Set these keys in `build.globalMetadata` for the whole site, in `fileMetadata` f
 | `_disableAffix` | Hide the **In this article** outline. |
 | `_disableBreadcrumb` | Hide the breadcrumb trail. |
 | `_disableNavbar` | Hide the top navigation. |
+| `_disableFooter` | Hide the page footer. |
 | `_disableTocFilter` | Hide the sidebar filter box. |
 | `_disableNextArticle` | Hide the previous and next links. |
 | `_disableContribution` | Hide the **Edit this page** link. |
