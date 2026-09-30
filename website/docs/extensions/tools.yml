@@ -1,0 +1,90 @@
+### YamlMime:Dashboard
+title: Tools
+description: |
+  Programs and commands that ship with pudu-lang-docgen. Each one is a thin program over the
+  library, so the same behavior is available from Pudu code; see [Library usage](../guides/library.md).
+items:
+- name: Command line
+  description: |
+    `examples/Cli.pudu` runs the full `docgen` command line: build, metadata, serve, init, pdf,
+    template, download, merge, version, and help.
+  type: Tool
+  author: Chris Michael
+  version: 0.1.0
+  license: Apache-2.0
+  thumbnail: ../images/pudu-lang-short.png
+  homepage: ../guides/commands/index.html
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/examples/Cli.pudu
+  usage:
+    command: pudu run examples/Cli.pudu build website
+- name: Build program
+  description: |
+    `examples/BuildSite.pudu` builds the sample project in `examples/site` by calling
+    `Docset.build` directly, and prints each diagnostic and a summary.
+  type: Tool
+  author: Chris Michael
+  version: 0.1.0
+  license: Apache-2.0
+  thumbnail: ../images/pudu-lang-short.png
+  homepage: ../guides/library.html
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/examples/BuildSite.pudu
+  usage:
+    command: pudu run examples/BuildSite.pudu
+- name: Preview server
+  description: |
+    Serves a built site over HTTP, answering missing addresses with the site's not-found page.
+    With `build --serve --watch`, the site is rebuilt whenever a project file changes.
+  type: Command
+  author: Chris Michael
+  version: 0.1.0
+  license: Apache-2.0
+  thumbnail: ../images/pudu-lang-short.png
+  homepage: ../guides/commands/serve.html
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Serve.pudu
+  usage:
+    command: docgen build docs --serve --watch
+- name: Project scaffolding
+  description: |
+    Creates a documentation project with a configuration, a landing page, starter articles,
+    navigation, and an optional API section.
+  type: Command
+  author: Chris Michael
+  version: 0.1.0
+  license: Apache-2.0
+  thumbnail: ../images/pudu-lang-short.png
+  homepage: ../guides/commands/init.html
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Scaffold.pudu
+  usage:
+    init: docgen init docs --yes
+- name: PDF printing
+  description: |
+    Prints a PDF for every table of contents that sets `pdf`, using an installed browser or a
+    renderer you configure.
+  type: Command
+  author: Chris Michael
+  version: 0.1.0
+  license: Apache-2.0
+  thumbnail: ../images/pudu-lang-short.png
+  homepage: ../guides/pdf.html
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Site/Print.pudu
+  usage:
+    command: docgen pdf docs
+    config: '"pdf": { "renderer": ["chromium", "--headless=new", "--print-to-pdf={output}", "{url}"] }'
+- name: Cross-reference maps
+  description: |
+    Saves another site's map for offline builds and combines several maps into one.
+  type: Command
+  author: Chris Michael
+  version: 0.1.0
+  license: Apache-2.0
+  thumbnail: ../images/pudu-lang-short.png
+  homepage: ../guides/cross-references.html#cross-reference-maps
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/References.pudu
+  usage:
+    command: docgen download maps/site.yml --xref https://pudu-lang-docgen.vercel.app/xrefmap.yml

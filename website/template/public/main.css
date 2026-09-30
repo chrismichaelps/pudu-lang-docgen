@@ -1,0 +1,152 @@
+/* Site styles loaded after the default theme. Colors come from the theme's custom properties
+   so light and dark schemes stay consistent. */
+
+.footer-inner {
+  padding: 40px 24px 24px;
+}
+
+.footer-grid {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) repeat(3, minmax(160px, 1fr));
+  gap: 32px;
+}
+
+.footer-grid p {
+  margin: 0 0 8px;
+}
+
+.footer-grid strong {
+  color: var(--text);
+  font-size: 14px;
+}
+
+.footer-column ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.footer-column li {
+  margin: 0 0 6px;
+}
+
+.site-footer a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.site-footer a:hover,
+.site-footer a:focus-visible {
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.footer-legal {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  gap: 8px 24px;
+  margin-top: 32px;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
+.footer-legal p {
+  margin: 0;
+}
+
+@media (max-width: 900px) {
+  .footer-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 520px) {
+  .footer-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* The logo is published at full resolution for link previews; show it small in articles. */
+.content img[src$="pudu-lang-short.png"] {
+  max-width: 120px;
+}
+
+/* Landing page */
+
+.layout-landing .content {
+  max-width: 1200px;
+  margin: 0 auto;
+}
+
+.layout-landing .content > h1 {
+  max-width: 820px;
+  margin: 48px 0 16px;
+  line-height: 1.1;
+  letter-spacing: -0.02em;
+}
+
+.hero-lead {
+  max-width: 760px;
+  color: var(--text-muted);
+  font-size: 20px;
+  line-height: 1.55;
+}
+
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 28px 0 48px;
+}
+
+.content a.button {
+  display: inline-flex;
+  align-items: center;
+  min-height: 40px;
+  padding: 0 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius);
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.content a.button:hover,
+.content a.button:focus-visible {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.content a.button-primary {
+  border-color: var(--accent);
+  background: var(--accent);
+  color: #fff;
+}
+
+.content a.button-primary:hover,
+.content a.button-primary:focus-visible {
+  background: var(--accent-hover);
+  color: #fff;
+}
+
+.layout-landing .row {
+  gap: 16px;
+}
+
+.layout-landing .column {
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-subtle);
+}
+
+.layout-landing .column h3 {
+  margin-top: 0;
+  font-size: 17px;
+}
+
+.layout-landing .column p:last-child {
+  margin-bottom: 0;
+}

@@ -1,0 +1,9 @@
+# API filter rules for the package reference. The first matching rule decides.
+#
+# The metadata helper module PuduLangDocgen.Meta shares its identity with the
+# PuduLangDocgen.Meta value type declared in the root module, so both would publish
+# api/PuduLangDocgen.Meta.html. The type is kept; the helper module is left out.
+apiRules:
+- exclude:
+    uidRegex: ^PuduLangDocgen\.Meta$
+    type: Module

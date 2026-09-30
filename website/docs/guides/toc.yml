@@ -1,0 +1,60 @@
+- name: Get started
+- name: Introduction
+  href: introduction.md
+- name: Quick start
+  href: quick-start.md
+- name: Basic concepts
+  href: concepts.md
+- name: Author content
+- name: Markdown authoring
+  href: markdown.md
+- name: Tables of contents
+  href: tables-of-contents.md
+- name: Links and cross references
+  href: cross-references.md
+- name: Reference content
+- name: Pudu API reference
+  href: api-reference.md
+- name: HTTP API reference
+  href: http-api.md
+- name: "Sample: Inventory service"
+  href: inventory-service.yml
+- name: Customize and publish
+- name: Configuration reference
+  href: configuration.md
+- name: Templates and theming
+  href: templates.md
+- name: Search and SEO
+  href: search-and-seo.md
+- name: PDF output
+  href: pdf.md
+- name: Deploying
+  href: deploying.md
+- name: Reference
+- name: Command-line reference
+  href: commands/index.md
+  items:
+  - name: build
+    href: commands/build.md
+  - name: metadata
+    href: commands/metadata.md
+  - name: serve
+    href: commands/serve.md
+  - name: init
+    href: commands/init.md
+  - name: pdf
+    href: commands/pdf.md
+  - name: template
+    href: commands/template.md
+  - name: download
+    href: commands/download.md
+  - name: merge
+    href: commands/merge.md
+  - name: version
+    href: commands/version.md
+  - name: help
+    href: commands/help.md
+- name: Library usage
+  href: library.md
+- name: Diagnostics reference
+  href: diagnostics.md

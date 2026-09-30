@@ -1,0 +1,24 @@
+/** @Samples.Inventory.Module — stock levels changed by receipts, sales, and counts */
+module Inventory
+
+// <types>
+/** @Samples.Inventory.Item — one stock keeping unit and the quantity on hand */
+export type Item = { sku: Str, quantity: Int }
+
+/** @Samples.Inventory.Change — an event that changes the quantity of an item */
+export type Change = Received(Int) | Sold(Int) | Counted(Int)
+// </types>
+
+// <apply>
+/// The item after a change: receipts add, sales remove, counts replace.
+export fn apply(item: Item, change: Change) -> Item {
+  match change {
+    case Received(count) => Item{..item, quantity: item.quantity + count}
+    case Sold(count) => Item{..item, quantity: item.quantity - count}
+    case Counted(count) => Item{..item, quantity: count}
+  }
+}
+// </apply>
+
+/// An item with nothing on hand.
+export fn empty(sku: Str) -> Item { Item{sku: sku, quantity: 0} }
