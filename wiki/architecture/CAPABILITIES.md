@@ -37,7 +37,12 @@ still to build. The acceptance boundary lists every behavior a row must cover.
 | Incremental output | unchanged files kept, stale outputs removed | Docset | Done |
 | CLI | build, metadata, serve with watching, pdf, init, download, merge, template list/export, version, help, exit statuses | Command | Done |
 | PDF | per-TOC printable documents, cover page, TOC page, header and footer templates, background printing, detected or configured renderer | Site/Print, Docset/Tasks | Done |
-| Release | full tests, mutation score, examples, CI, wiki API docs | tools, examples | Open |
+| Reference services | `xrefService` addresses holding `{uid}` asked for identities a trial build left unresolved | References, Docset/Tools | Done |
+| Page switches | `_disableFooter` beside the other `_disable*` switches | Site/View, Theme/Layout | Done |
+| Landing pages | `YamlMime:Landing` hub pages: full-width banner, highlighted entry points, topic lists, related content, page metadata | Site/Landing, Build | Done |
+| Site footer | `_footerLinks` and `_copyright` dated by the build year; `_appFooter` still replaces it | Site/View, Theme/Layout | Done |
+| Mobile header | site name kept on small screens; navbar behind a toggle below 1024 pixels | Theme/Layout, Theme/Style, Theme/Script | Done |
+| Release | full tests, examples, CI, wiki API docs | tools, examples | Done |
 
 ## Referenced by
 

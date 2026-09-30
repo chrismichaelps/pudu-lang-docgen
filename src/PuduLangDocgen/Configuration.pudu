@@ -5,6 +5,7 @@ import Std.Json as Json
 import PuduLangDocgen.Api.Catalog as Catalog
 import PuduLangDocgen.Api.Export as Export
 import PuduLangDocgen.Configuration.Fields as Fields
+import PuduLangDocgen.Configuration.Rules as Rules
 import PuduLangDocgen.Constants.Codes as Codes
 import PuduLangDocgen as Docgen
 import PuduLangDocgen.Meta as Meta
@@ -12,10 +13,10 @@ import PuduLangDocgen.Site.Sitemap as Sitemap
 import PuduLangDocgen.Yaml as Yaml
 
 /** @Docgen.Configuration.Mapping — files matched by globs under a source folder, published under a destination */
-export type Mapping = { files: Array[Str], exclude: Array[Str], src: Str, dest: Str }
+export type Mapping = { files: Array[Str], exclude: Array[Str], src: Str, dest: Str, meta: Array[(Str, Docgen.Meta)] }
 
 /** @Docgen.Configuration.ApiSource — Pudu sources documented as reference pages */
-export type ApiSource = { mappings: Array[Mapping], options: Catalog.Options, format: Str }
+export type ApiSource = { mappings: Array[Mapping], options: Catalog.Options, format: Str, filterFile: Str }
 
 /** @Docgen.Configuration.Contribution — the repository behind edit links */
 export type Contribution = { repo: Str, branch: Str, path: Str }
@@ -39,6 +40,7 @@ export type Config = {
   fileMetadataFiles: Array[Str],
   templates: Array[Str],
   xref: Array[Str],
+  xrefService: Array[Str],
   sitemap: Option[Sitemap.Options],
   gitFeatures: Bool,
   contribution: Contribution,
@@ -59,7 +61,7 @@ export const LEVELS: Array[Str] = ["error", "warning", "info", "off"]
 export fn defaults() -> Config {
   Config {
     metadata: [], content: [], resource: [], overwrite: [], output: "_site", globalMetadata: [], globalMetadataFiles: [],
-    fileMetadata: [], fileMetadataFiles: [], templates: ["default"], xref: [], sitemap: None, gitFeatures: true,
+    fileMetadata: [], fileMetadataFiles: [], templates: ["default"], xref: [], xrefService: [], sitemap: None, gitFeatures: true,
     contribution: Contribution{repo: "", branch: "main", path: ""}, warningsAsErrors: false, rules: [], alerts: [],
     diagrams: Diagrams{remote: "https://www.plantuml.com/plantuml", format: "svg", local: false, jar: "plantuml.jar", java: "java"},
     dryRun: false, exportRawModel: "", exportViewModel: "", pdf: None
@@ -84,9 +86,24 @@ export fn parse(file: Str, text: Str) -> Result[Config, Array[Docgen.Diagnostic]
     case Docgen.Fields(found) => found
     case _ => { return Err([Docgen.error(Codes.CONFIG_INVALID, file, 1, "configuration must be an object")]) }
   }
-  match read(&Fields.Reader{file: file, at: "", fields: fields}) {
-    case Ok(found) => Ok(found)
-    case Err(problem) => Err([problem])
+  let config = match read(&Fields.Reader{file: file, at: "", fields: fields}) {
+    case Ok(found) => found
+    case Err(problem) => { return Err([problem]) }
+  }
+  let problems = Rules.check(file, &judged(&config))
+  if problems.isEmpty() { Ok(config) } else { Err(problems) }
+}
+
+/// The values the cross-field rules judge.
+fn judged(config: &Config) -> Rules.Settings {
+  let (mapped, base, priority, frequency) = match config.sitemap {
+    case Some(found) => (true, found.baseUrl, found.priority, found.changefreq)
+    case None => (false, "", "", "")
+  }
+  Rules.Settings {
+    output: config.output, sitemap: mapped, baseUrl: base, priority: priority, changefreq: frequency, xref: config.xref, services: config.xrefService,
+    destinations: config.metadata.map(|source: ApiSource| source.options.dest), repository: config.contribution.repo,
+    renderer: match config.pdf { case Some(found) => found.renderer case None => [] }
   }
 }
 
@@ -98,7 +115,7 @@ fn read(top: &Fields.Reader) -> Result[Config, Docgen.Diagnostic] {
   for held in Fields.objects(top, "metadata") ? { sources = sources.push(apiSource(&held) ?) }
   config = Config{..config, metadata: sources}
   let build = Fields.nested(top, "build") ?
-  Fields.only(&build, &["content", "resource", "overwrite", "output", "dest", "globalMetadata", "globalMetadataFiles", "fileMetadata", "fileMetadataFiles", "template", "xref", "sitemap", "disableGitFeatures", "gitContribute", "warningsAsErrors", "rules", "markdownEngineProperties", "dryRun", "exportRawModel", "rawModelOutputFolder", "exportViewModel", "viewModelOutputFolder"]) ?
+  Fields.only(&build, &["content", "resource", "overwrite", "output", "dest", "globalMetadata", "globalMetadataFiles", "fileMetadata", "fileMetadataFiles", "template", "xref", "xrefService", "sitemap", "disableGitFeatures", "gitContribute", "warningsAsErrors", "rules", "markdownEngineProperties", "dryRun", "groups", "theme", "exportRawModel", "rawModelOutputFolder", "exportViewModel", "viewModelOutputFolder"]) ?
   let global = Fields.nested(&build, "globalMetadata") ?
   let files = Fields.nested(&build, "fileMetadata") ?
   let rules = match Meta.rulesOf(&files.fields) {
@@ -106,13 +123,13 @@ fn read(top: &Fields.Reader) -> Result[Config, Docgen.Diagnostic] {
     case Err(reason) => { return Err(Fields.failure(&build, "fileMetadata", reason)) }
   }
   let output = Fields.directory(&build, "output", Fields.directory(&build, "dest", "_site") ?) ?
-  if output.isEmpty() { return Err(Fields.failure(&build, "output", "must name a folder other than the project folder")) }
-  let templates = Fields.texts(&build, "template") ?
+  let chosen = Fields.texts(&build, "template") ?
+  let templates = (if chosen.isEmpty() { ["default"] } else { chosen }).concat(Fields.texts(&build, "theme") ?)
   config = Config{..config,
-    content: mappings(&build, "content") ?, resource: mappings(&build, "resource") ?, overwrite: mappings(&build, "overwrite") ?,
+    content: mappings(&build, "content", false) ?, resource: mappings(&build, "resource", false) ?, overwrite: mappings(&build, "overwrite", false) ?,
     output: output, globalMetadata: global.fields, globalMetadataFiles: Fields.texts(&build, "globalMetadataFiles") ?,
     fileMetadata: rules, fileMetadataFiles: Fields.texts(&build, "fileMetadataFiles") ?,
-    templates: if templates.isEmpty() { ["default"] } else { templates }, xref: Fields.texts(&build, "xref") ?,
+    templates: templates, xref: Fields.texts(&build, "xref") ?, xrefService: Fields.texts(&build, "xrefService") ?,
     gitFeatures: !(Fields.flag(&build, "disableGitFeatures", false) ?), warningsAsErrors: Fields.flag(&build, "warningsAsErrors", false) ?,
     dryRun: Fields.flag(&build, "dryRun", false) ?,
     exportRawModel: if Fields.flag(&build, "exportRawModel", false) ? { Fields.directory(&build, "rawModelOutputFolder", output) ? } else { "" },
@@ -151,53 +168,75 @@ fn read(top: &Fields.Reader) -> Result[Config, Docgen.Diagnostic] {
   Ok(config)
 }
 
-/// File mappings under a key; plain text or a list of globs counts as one mapping.
-fn mappings(reader: &Fields.Reader, key: Str) -> Result[Array[Mapping], Docgen.Diagnostic] {
+/// File mappings under a key; plain text or a list of globs counts as one mapping. Only API
+/// sources, marked by `above`, may name a source folder above the project.
+fn mappings(reader: &Fields.Reader, key: Str, above: Bool) -> Result[Array[Mapping], Docgen.Diagnostic] {
   match Meta.get(&reader.fields, key) {
-    case Some(Docgen.Text(_found)) => { return Ok([Mapping{files: Fields.texts(reader, key) ?, exclude: [], src: "", dest: ""}]) }
+    case Some(Docgen.Text(_found)) => { return Ok([Mapping{files: Fields.texts(reader, key) ?, exclude: [], src: "", dest: "", meta: []}]) }
     case Some(Docgen.Items(listed)) => {
       let plain = listed.filter(|held: Docgen.Meta| match held { case Docgen.Text(_found) => true case _ => false })
-      if plain.length() == listed.length() && !listed.isEmpty() { return Ok([Mapping{files: Fields.texts(reader, key) ?, exclude: [], src: "", dest: ""}]) }
+      if plain.length() == listed.length() && !listed.isEmpty() { return Ok([Mapping{files: Fields.texts(reader, key) ?, exclude: [], src: "", dest: "", meta: []}]) }
     }
     case _ => {}
   }
   var result: Array[Mapping] = []
   for held in Fields.objects(reader, key) ? {
-    Fields.only(&held, &["files", "exclude", "src", "dest"]) ?
+    Fields.only(&held, &["files", "exclude", "src", "dest", "group"]) ?
     let files = Fields.texts(&held, "files") ?
     if files.isEmpty() { return Err(Fields.failure(&held, "files", "must name at least one glob")) }
-    result = result.push(Mapping{files: files, exclude: Fields.texts(&held, "exclude") ?, src: Fields.directory(&held, "src", "") ?, dest: Fields.directory(&held, "dest", "") ?})
+    var dest = Fields.directory(&held, "dest", "") ?
+    var meta: Array[(Str, Docgen.Meta)] = []
+    let group = Fields.text(&held, "group", "") ?
+    if !group.isEmpty() {
+      let groups = Fields.nested(reader, "groups") ?
+      let settings = Fields.nested(&groups, group) ?
+      if settings.fields.isEmpty() { return Err(Fields.failure(&held, "group", "names no entry of build.groups: " + group)) }
+      let folder = Fields.directory(&settings, "dest", "") ?
+      dest = if folder.isEmpty() { dest } else if dest.isEmpty() { folder } else { folder + "/" + dest }
+      for (name, held) in settings.fields {
+        if name != "dest" { meta = meta.push((name, held)) }
+      }
+    }
+    result = result.push(Mapping{files: files, exclude: Fields.texts(&held, "exclude") ?, src: if above { Fields.sourceFolder(&held, "src", "") ? } else { Fields.directory(&held, "src", "") ? }, dest: dest, meta: meta})
   }
   Ok(result)
 }
 
 /// One API metadata source.
 fn apiSource(reader: &Fields.Reader) -> Result[ApiSource, Docgen.Diagnostic] {
-  Fields.only(reader, &["src", "dest", "includePrivateMembers", "filter", "sourceUrl", "outputFormat", "namespaceLayout", "memberLayout"]) ?
-  let sources = mappings(reader, "src") ?
+  Fields.only(reader, &["src", "dest", "includePrivateMembers", "filter", "sourceUrl", "sourceLinkExclude", "outputFormat", "namespaceLayout", "memberLayout", "categoryLayout", "enumSortOrder", "shouldSkipMarkup"]) ?
+  let sources = mappings(reader, "src", true) ?
   if sources.isEmpty() { return Err(Fields.failure(reader, "src", "must name the Pudu sources to document")) }
-  let filter = Fields.nested(reader, "filter") ?
+  let filterFile = match Meta.get(&reader.fields, "filter") {
+    case Some(Docgen.Text(path)) => path
+    case _ => ""
+  }
+  let filter = if filterFile.isEmpty() { Fields.nested(reader, "filter") ? } else { Fields.Reader{file: reader.file, at: reader.at + ".filter", fields: []} }
   Fields.only(&filter, &["include", "exclude"]) ?
   let format = Fields.text(reader, "outputFormat", "json") ?
   if !Export.FORMATS.contains(format) { return Err(Fields.failure(reader, "outputFormat", "must be one of " + Export.FORMATS.join(", "))) }
-  let namespaces = Fields.text(reader, "namespaceLayout", "flattened") ?
-  if namespaces != "flattened" && namespaces != "nested" { return Err(Fields.failure(reader, "namespaceLayout", "must be flattened or nested")) }
-  let members = Fields.text(reader, "memberLayout", "samePage") ?
-  if members != "samePage" && members != "separatePages" { return Err(Fields.failure(reader, "memberLayout", "must be samePage or separatePages")) }
-  let options = Catalog.Options{dest: Fields.directory(reader, "dest", "api") ?, includePrivate: Fields.flag(reader, "includePrivateMembers", false) ?, include: Fields.texts(&filter, "include") ?, exclude: Fields.texts(&filter, "exclude") ?, sourceUrl: Fields.text(reader, "sourceUrl", "") ?, nested: namespaces == "nested", separate: members == "separatePages"}
-  Ok(ApiSource{mappings: sources, options: options, format: format})
+  let namespaces = choice(reader, "namespaceLayout", "flattened", &["flattened", "nested"]) ?
+  let members = choice(reader, "memberLayout", "samePage", &["samePage", "separatePages"]) ?
+  let categories = choice(reader, "categoryLayout", "flattened", &["flattened", "nested", "none"]) ?
+  let order = choice(reader, "enumSortOrder", "declaringOrder", &["alphabetic", "declaringOrder"]) ?
+  let options = Catalog.Options{..Catalog.defaults(),
+    dest: Fields.directory(reader, "dest", "api") ?, includePrivate: Fields.flag(reader, "includePrivateMembers", false) ?,
+    include: Fields.texts(&filter, "include") ?, exclude: Fields.texts(&filter, "exclude") ?, sourceUrl: Fields.text(reader, "sourceUrl", "") ?,
+    sourceExclude: Fields.texts(reader, "sourceLinkExclude") ?, nested: namespaces == "nested", separate: members == "separatePages",
+    skipMarkup: Fields.flag(reader, "shouldSkipMarkup", false) ?, alphabetic: order == "alphabetic", categories: categories }
+  Ok(ApiSource{mappings: sources, options: options, format: format, filterFile: filterFile})
 }
 
-/// Sitemap settings; the base address must be absolute.
+/// Text under a key that must be one of the allowed values.
+fn choice(reader: &Fields.Reader, key: Str, fallback: Str, allowed: &Array[Str]) -> Result[Str, Docgen.Diagnostic] {
+  let written = Fields.text(reader, key, fallback) ?
+  if !allowed.contains(written) { return Err(Fields.failure(reader, key, "must be one of " + allowed.join(", "))) }
+  Ok(written)
+}
+
+/// Sitemap settings with per-glob file options.
 fn sitemap(reader: &Fields.Reader) -> Result[Sitemap.Options, Docgen.Diagnostic] {
   Fields.only(reader, &["baseUrl", "priority", "changefreq", "fileOptions"]) ?
-  let base = Fields.text(reader, "baseUrl", "") ?
-  let lowered = base.toLower()
-  if !lowered.startsWith("https://") && !lowered.startsWith("http://") { return Err(Fields.failure(reader, "baseUrl", "must be an absolute http or https address")) }
-  let changefreq = Fields.text(reader, "changefreq", "") ?
-  if !changefreq.isEmpty() && !Sitemap.FREQUENCIES.contains(changefreq) { return Err(Fields.failure(reader, "changefreq", "must be one of " + Sitemap.FREQUENCIES.join(", "))) }
-  let priority = Fields.text(reader, "priority", "") ?
-  if !priority.isEmpty() && !validPriority(priority) { return Err(Fields.failure(reader, "priority", "must be a number from 0.0 to 1.0")) }
   let options = Fields.nested(reader, "fileOptions") ?
   var files: Array[(Str, Array[(Str, Docgen.Meta)])] = []
   for (pattern, _settings) in options.fields {
@@ -205,18 +244,5 @@ fn sitemap(reader: &Fields.Reader) -> Result[Sitemap.Options, Docgen.Diagnostic]
     Fields.only(&settings, &["baseUrl", "priority", "changefreq"]) ?
     files = files.push((pattern, settings.fields))
   }
-  Ok(Sitemap.Options{baseUrl: base, priority: priority, changefreq: changefreq, files: files})
-}
-
-/// Whether text is a decimal number from 0 to 1.
-fn validPriority(text: Str) -> Bool {
-  let parts = text.split(".")
-  if parts.length() > 2 || parts[0].isEmpty() { return false }
-  for part in parts {
-    for character in part.chars() {
-      if character < '0' || character > '9' { return false }
-    }
-  }
-  if parts[0] == "1" { return parts.length() == 1 || parts[1].replace("0", "").isEmpty() }
-  parts[0] == "0"
+  Ok(Sitemap.Options{baseUrl: Fields.text(reader, "baseUrl", "") ?, priority: Fields.text(reader, "priority", "0.5") ?, changefreq: Fields.text(reader, "changefreq", "daily") ?, files: files})
 }

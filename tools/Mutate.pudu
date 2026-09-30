@@ -26,6 +26,12 @@ const OPERATORS: Array[(Str, Str)] = [
 /// Longest a mutant's test run may take before it counts as killed.
 const MUTANT_TIMEOUT_MS: Int = 60000
 
+/// Folder holding the package's modules.
+const SOURCE_ROOT: Str = "src/PuduLangDocgen/"
+
+/// Folder holding the package's suites.
+const TEST_ROOT: Str = "test/PuduLangDocgen/"
+
 /// Source files outside the pure layer: seams to the disk, the network, the command line,
 /// and generated reference tables, which `--domain` leaves alone.
 const OUTSIDE_DOMAIN: Array[Str] = [
@@ -95,10 +101,9 @@ fn judge(compiler: Str, mutant: &Mutant) -> Verdict {
       if checked.status != 0 || checked.output.contains("error[") {
         Invalid
       } else {
-        match Process.within(compiler, &["test", "test"], MUTANT_TIMEOUT_MS) {
-          case Ok(Some(tested)) => if tested.status == 0 { Survived } else { Killed }
-          case Ok(None) => Killed
-          case Err(_) => Invalid
+        match Option.map(suiteOf(mutant.file), |suite: Str| tested(compiler, suite)) {
+          case Some(Killed) => Killed
+          case _ => tested(compiler, "test")
         }
       }
     }
@@ -106,6 +111,29 @@ fn judge(compiler: Str, mutant: &Mutant) -> Verdict {
   }
   let _restored = Io.write(mutant.file, original)
   verdict
+}
+
+/// The verdict of the checks under a test path: a failure or a run past the deadline kills.
+fn tested(compiler: Str, path: Str) -> Verdict {
+  match Process.within(compiler, &["test", path], MUTANT_TIMEOUT_MS) {
+    case Ok(Some(finished)) => if finished.status == 0 { Survived } else { Killed }
+    case Ok(None) => Killed
+    case Err(_) => Invalid
+  }
+}
+
+/// The suite that owns a file, when one exists: `ApiExportTest` for `Api/Export`, else the
+/// suite of its top folder, `ApiTest`. It runs first so most mutants die without the whole
+/// test tree.
+fn suiteOf(file: Str) -> Option[Str] {
+  if !file.startsWith(SOURCE_ROOT) { return None }
+  let parts = file.drop(SOURCE_ROOT.length()).replace(".pudu", "").split("/")
+  let owners = if parts.length() > 1 { [parts[0] + parts[parts.length() - 1], parts[0]] } else { [parts[0]] }
+  for owner in owners {
+    let suite = TEST_ROOT + owner + "Test.pudu"
+    if Result.isOk(&Io.read(suite)) { return Some(suite) }
+  }
+  None
 }
 
 /// Every mutant of one file's text.

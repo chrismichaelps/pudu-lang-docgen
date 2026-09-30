@@ -25,7 +25,7 @@ const IGNORED: Array[Str] = ["node_modules", "obj", "bin", "deps", "dist-newstyl
 /// ignored folders, the `skip` folders, and symbolic links are left out.
 export fn files(base: Str, skip: &Array[Str]) -> Result[Array[Str], Array[Docgen.Diagnostic]] {
   let found = walk(base, "", skip, 0) ?
-  Ok(List.sortBy(&found, |left: Str, right: Str| left < right))
+  Ok(List.sorted(&found))
 }
 
 /// The text of files by relative path; unreadable files are reported and left out.
@@ -81,7 +81,7 @@ fn walk(base: Str, relative: Str, skip: &Array[Str], depth: Int) -> Result[Array
   if depth > MAX_DEPTH { return Err([Docgen.error(Codes.FILE_UNREADABLE, relative, 1, "folders nest deeper than " + show(MAX_DEPTH))]) }
   let directory = if relative.isEmpty() { base } else { Path.join(base, relative) }
   let names = match Io.list(directory) {
-    case Ok(found) => List.sortBy(&found, |left: Str, right: Str| left < right)
+    case Ok(found) => List.sorted(&found)
     case Err(reason) => { return Err([Docgen.error(Codes.FILE_UNREADABLE, if relative.isEmpty() { "." } else { relative }, 1, reason)]) }
   }
   var result: Array[Str] = []

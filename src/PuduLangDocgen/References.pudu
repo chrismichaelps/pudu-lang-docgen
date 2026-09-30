@@ -4,11 +4,21 @@ module PuduLangDocgen.References
 import Std.Json as Json
 import Std.List as List
 import Std.Map as Map
+import Std.Url as Url
 import PuduLangDocgen.Constants.Codes as Codes
 import PuduLangDocgen as Docgen
 import PuduLangDocgen.Meta as Meta
 import PuduLangDocgen.Paths as Paths
 import PuduLangDocgen.Yaml as Yaml
+
+/// Message prefix of an unresolved cross reference, followed by its identity.
+export const UNRESOLVED: Str = "unresolved cross reference: "
+
+/// Placeholder a reference service address holds for the identity asked about.
+export const UID_SLOT: Str = "\{uid\}"
+
+/// Refusal of a document that is neither a map nor a service's list of references.
+const NOT_A_MAP: Str = "cross-reference map must be a mapping with references"
 
 /// References by identity: page identities first, then external maps. A page identity
 /// declared twice is an error; an external identity already known is skipped.
@@ -58,11 +68,12 @@ export fn toJson(references: &Array[Docgen.Reference], baseUrl: Str) -> Str {
   Json.encodePretty(&Json.object(&top.push(("references", Json.list(&entries)))))
 }
 
-/// References read from a YAML or JSON cross-reference map. Relative destinations resolve
-/// against the map's `baseUrl`, or else against the address the map was read from.
+/// References read from a YAML or JSON cross-reference map, or from the bare JSON list of
+/// references a reference service answers with. Relative destinations resolve against the
+/// map's `baseUrl`, or else against the address the map was read from.
 export fn parse(origin: Str, text: Str) -> Result[Array[Docgen.Reference], Str] {
   let trimmed = text.trim()
-  let value = if trimmed.startsWith("\{") {
+  let value = if trimmed.startsWith("\{") || trimmed.startsWith("[") {
     match Json.decode(trimmed) {
       case Ok(found) => Meta.fromJson(&found)
       case Err(problem) => { return Err("cross-reference map is not valid JSON: " + Json.explain(&problem)) }
@@ -70,7 +81,11 @@ export fn parse(origin: Str, text: Str) -> Result[Array[Docgen.Reference], Str] 
   } else { Yaml.decode(text) ? }
   let fields = match value {
     case Docgen.Fields(found) => found
-    case _ => { return Err("cross-reference map must be a mapping with references") }
+    case Docgen.Items(found) => {
+      if !trimmed.startsWith("[") { return Err(NOT_A_MAP) }
+      [("references", Docgen.Items(found))]
+    }
+    case _ => { return Err(NOT_A_MAP) }
   }
   let base = Meta.textOr(&fields, "baseUrl", "")
   let listed = match Meta.get(&fields, "references") {
@@ -95,6 +110,24 @@ export fn parse(origin: Str, text: Str) -> Result[Array[Docgen.Reference], Str] 
   Ok(result)
 }
 
+/// Identities of the cross references a build reported as unresolved, each once.
+export fn unresolved(diagnostics: &Array[Docgen.Diagnostic]) -> Array[Str] {
+  var found: Array[Str] = []
+  for held in *diagnostics {
+    if held.code == Codes.XREF_UNRESOLVED && held.message.startsWith(UNRESOLVED) {
+      let uid = held.message.drop(UNRESOLVED.length())
+      if !found.contains(uid) { found = found.push(uid) }
+    }
+  }
+  found
+}
+
+/// The address a reference service is asked at for one identity: every `\{uid\}` in the
+/// service address replaced by the percent-encoded identity.
+export fn serviceAddress(service: Str, uid: Str) -> Str {
+  service.replace(UID_SLOT, Url.encodeComponent(uid))
+}
+
 /// References of published pages that declare an identity.
 export fn ofPages(pages: &Array[Docgen.Page]) -> Array[Docgen.Reference] {
   pages.filter(|page: Docgen.Page| !page.uid.isEmpty()).map(|page: Docgen.Page| Docgen.Reference{uid: page.uid, name: page.title, fullName: page.title, href: page.path, kind: page.kind})
@@ -102,7 +135,7 @@ export fn ofPages(pages: &Array[Docgen.Page]) -> Array[Docgen.Reference] {
 
 /// References ordered by identity.
 fn sorted(references: &Array[Docgen.Reference]) -> Array[Docgen.Reference] {
-  List.sortBy(references, |left: Docgen.Reference, right: Docgen.Reference| left.uid < right.uid)
+  List.sortOn(references, |held: Docgen.Reference| held.uid)
 }
 
 /// A destination joined to a base address, or to the folder of the address a map came from.

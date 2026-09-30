@@ -1,0 +1,82 @@
+/** @Docgen.Configuration.Rules — cross-field rules a read configuration must satisfy */
+module PuduLangDocgen.Configuration.Rules
+
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.References as References
+import PuduLangValidator.Result as Validation
+import PuduLangValidator.Rule as Rule
+import PuduLangValidator.Rules.Collection as Each
+import PuduLangValidator.Validator as Validator
+
+/** @Docgen.Configuration.Settings — the configuration values these rules judge */
+export type Settings = {
+  output: Str,
+  sitemap: Bool,
+  baseUrl: Str,
+  priority: Str,
+  changefreq: Str,
+  xref: Array[Str],
+  services: Array[Str],
+  destinations: Array[Str],
+  repository: Str,
+  renderer: Array[Str]
+}
+
+/// Change frequencies crawlers understand.
+export const FREQUENCIES: Array[Str] = ["always", "hourly", "daily", "weekly", "monthly", "yearly", "never"]
+
+/// Failures of the rules as configuration diagnostics located by property path.
+export fn check(file: Str, settings: &Settings) -> Array[Docgen.Diagnostic] {
+  let outcome = Validator.validate(&validator(), *settings)
+  outcome.errors.map(|failure: Validation.Failure| Docgen.error(Codes.CONFIG_INVALID, file, 1, failure.propertyName + ": " + failure.errorMessage))
+}
+
+/// The rules: an output folder other than the project folder, an absolute sitemap address
+/// with a priority from 0 to 1 and a known change frequency, reference maps that are web
+/// addresses or project paths, reference services that are web addresses holding `\{uid\}`, distinct API destinations, a web repository for edit links,
+/// and a PDF renderer that names its `\{output\}`.
+fn validator() -> Validator.Validator[Settings] {
+  let output = Rule.build(Rule.withMessage(Rule.must(Rule.ruleFor("build.output", |held: Settings| held.output), |value: Str| !value.isEmpty()), "must name a folder other than the project folder"))
+  let baseUrl = Rule.build(Rule.when(Rule.withMessage(Rule.must(Rule.ruleFor("build.sitemap.baseUrl", |held: Settings| held.baseUrl), |value: Str| web(value)), "must be an absolute http or https address"), |held: Settings| held.sitemap))
+  let priority = Rule.build(Rule.when(Rule.withMessage(Rule.must(Rule.ruleFor("build.sitemap.priority", |held: Settings| held.priority), |value: Str| value.isEmpty() || fraction(value)), "must be a number from 0.0 to 1.0"), |held: Settings| held.sitemap))
+  let frequency = Rule.build(Rule.when(Rule.withMessage(Rule.must(Rule.ruleFor("build.sitemap.changefreq", |held: Settings| held.changefreq), |value: Str| value.isEmpty() || FREQUENCIES.contains(value)), "must be one of " + FREQUENCIES.join(", ")), |held: Settings| held.sitemap))
+  let xref = Each.buildEach(Each.withMessage(Each.must(Each.ruleForEach("build.xref", |held: Settings| held.xref), |value: Str| web(value) || Paths.relative(value)), "must be a web address or a relative path inside the project"))
+  let services = Each.buildEach(Each.withMessage(Each.must(Each.ruleForEach("build.xrefService", |held: Settings| held.services), |value: Str| web(value) && value.contains(References.UID_SLOT)), "must be a web address holding \{uid\}"))
+  let destinations = Rule.build(Rule.withMessage(Rule.must(Rule.ruleFor("metadata.dest", |held: Settings| held.destinations), |values: Array[Str]| distinct(&values)), "each API source needs its own destination folder"))
+  let repository = Rule.build(Rule.withMessage(Rule.must(Rule.ruleFor("build.gitContribute.repo", |held: Settings| held.repository), |value: Str| value.isEmpty() || web(value)), "must be an http or https address"))
+  let renderer = Rule.build(Rule.withMessage(Rule.must(Rule.ruleFor("pdf.renderer", |held: Settings| held.renderer), |values: Array[Str]| values.isEmpty() || (!values[0].isEmpty() && values.filter(|part: Str| part.contains("\{output\}")).length() > 0)), "must name a program and an argument holding \{output\}"))
+  var result = Validator.create()
+  for rule in [output, baseUrl, priority, frequency, xref, services, destinations, repository, renderer] { result = Validator.add(result, rule) }
+  result
+}
+
+/// Whether text is an absolute HTTP or HTTPS address.
+fn web(value: Str) -> Bool {
+  let lowered = value.toLower()
+  (lowered.startsWith("https://") || lowered.startsWith("http://")) && Paths.href(value)
+}
+
+/// Whether text is a decimal number from 0 to 1.
+fn fraction(text: Str) -> Bool {
+  let parts = text.split(".")
+  if parts.length() > 2 || parts[0].isEmpty() { return false }
+  for part in parts {
+    for character in part.chars() {
+      if character < '0' || character > '9' { return false }
+    }
+  }
+  if parts[0] == "1" { return parts.length() == 1 || parts[1].replace("0", "").isEmpty() }
+  parts[0] == "0"
+}
+
+/// Whether no text appears twice.
+fn distinct(values: &Array[Str]) -> Bool {
+  var seen: Array[Str] = []
+  for value in *values {
+    if seen.contains(value) { return false }
+    seen = seen.push(value)
+  }
+  true
+}

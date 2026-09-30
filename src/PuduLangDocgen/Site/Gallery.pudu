@@ -1,0 +1,85 @@
+/** @Docgen.Site.Gallery — catalog pages of extensions shown as cards */
+module PuduLangDocgen.Site.Gallery
+
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown as Markdown
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Site.Card — the rendered page of a catalog */
+export type Rendered = { title: Str, body: Str, headings: Array[Docgen.Heading], links: Array[Docgen.Link], diagnostics: Array[Docgen.Diagnostic] }
+
+/// Marker on the first line of a catalog file.
+export const MARKER: Str = "YamlMime:Dashboard"
+
+/// Usage entries shown on a card, with their labels.
+const USAGE: Array[(Str, Str)] = [("install", "Install"), ("init", "Get"), ("command", "Command line"), ("config", "Configuration")]
+
+/// A catalog page: `title`, an optional `description`, and `items`, each with a `name` and any
+/// of `description`, `type`, `author`, `version`, `license`, `thumbnail`, `homepage`,
+/// `repository.url`, and `usage` entries.
+export fn render(value: &Docgen.Meta, context: &Phrase.Scope) -> Result[Rendered, Str] {
+  let fields = match value {
+    case Docgen.Fields(found) => found
+    case _ => { return Err("catalog must be an object") }
+  }
+  let title = Meta.textOr(&fields, "title", "")
+  if title.isEmpty() { return Err("catalog needs a title") }
+  let items = match Meta.get(&fields, "items") {
+    case Some(Docgen.Items(found)) => found
+    case _ => { return Err("catalog needs an items list") }
+  }
+  var result = Rendered{title: title, body: "", headings: [Docgen.Heading{id: Paths.slug(title), title: title, level: 1}], links: [], diagnostics: []}
+  var pieces = ["<h1 id=\"" + Paths.escape(Paths.slug(title)) + "\">" + Paths.escape(title) + "</h1>"]
+  let introduction = Meta.textOr(&fields, "description", "")
+  if !introduction.isEmpty() {
+    let rendered = Markdown.fragment(introduction, context, 1)
+    pieces = pieces.push(rendered.html)
+    result = Rendered{..result, links: result.links.concat(rendered.links), diagnostics: result.diagnostics.concat(rendered.diagnostics)}
+  }
+  pieces = pieces.push("<div class=\"gallery\">")
+  for item in items {
+    let card = match item {
+      case Docgen.Fields(found) => found
+      case _ => { return Err("each catalog item must be an object") }
+    }
+    let name = Meta.textOr(&card, "name", "")
+    if name.isEmpty() { return Err("each catalog item needs a name") }
+    let id = Paths.slug(name)
+    let homepage = safe(Meta.textOr(&card, "homepage", ""))
+    let heading = if homepage.isEmpty() { Paths.escape(name) } else { "<a href=\"" + Paths.escape(homepage) + "\">" + Paths.escape(name) + "</a>" }
+    var facts: Array[Str] = []
+    for key in ["author", "version", "license"] {
+      let written = Meta.textOr(&card, key, "")
+      if !written.isEmpty() { facts = facts.push(Paths.escape(written)) }
+    }
+    let kind = Meta.textOr(&card, "type", "")
+    var parts = ["<article class=\"card\" id=\"" + Paths.escape(id) + "\">"]
+    let thumbnail = safe(Meta.textOr(&card, "thumbnail", ""))
+    if !thumbnail.isEmpty() { parts = parts.push("<img class=\"card-image\" src=\"" + Paths.escape(thumbnail) + "\" alt=\"\" loading=\"lazy\">") }
+    parts = parts.push("<div class=\"card-body\"><h2 class=\"card-title\">" + heading + "</h2>")
+    parts = parts.push("<p class=\"card-meta\">" + (if kind.isEmpty() { "" } else { "<span class=\"badge\">" + Paths.escape(kind) + "</span> " }) + facts.join(" · ") + "</p>")
+    let description = Meta.textOr(&card, "description", "")
+    if !description.isEmpty() {
+      let rendered = Markdown.fragment(description, context, 2)
+      parts = parts.push(rendered.html)
+      result = Rendered{..result, links: result.links.concat(rendered.links), diagnostics: result.diagnostics.concat(rendered.diagnostics)}
+    }
+    let usage = Meta.fieldsOf(&card, "usage")
+    var entries: Array[Str] = []
+    for (key, label) in USAGE {
+      let written = Meta.textOr(&usage, key, "")
+      if !written.isEmpty() { entries = entries.push("<dt>" + label + "</dt><dd><code>" + Paths.escape(written) + "</code></dd>") }
+    }
+    if !entries.isEmpty() { parts = parts.push("<dl class=\"card-usage\">" + entries.join("") + "</dl>") }
+    let repository = safe(Meta.textOr(&Meta.fieldsOf(&card, "repository"), "url", ""))
+    if !repository.isEmpty() { parts = parts.push("<p class=\"card-links\"><a class=\"external\" href=\"" + Paths.escape(repository) + "\">Source</a></p>") }
+    pieces = pieces.push(parts.push("</div></article>").join(""))
+    result = Rendered{..result, headings: result.headings.push(Docgen.Heading{id: id, title: name, level: 2})}
+  }
+  Ok(Rendered{..result, body: pieces.push("</div>").join("\n")})
+}
+
+/// A destination kept only when it is safe to link.
+fn safe(destination: Str) -> Str { if destination.isEmpty() || !Paths.href(destination) { "" } else { destination } }

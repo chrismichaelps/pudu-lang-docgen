@@ -27,7 +27,7 @@ export fn files(units: &Array[Model.Unit], format: Str) -> Array[(Str, Str)] {
       }
     }
   }
-  let options = Catalog.Options{dest: "", includePrivate: true, include: [], exclude: [], sourceUrl: "", nested: false, separate: false}
+  let options = Catalog.Options{..Catalog.defaults(), dest: ""}
   let toc = Catalog.toc(units, &options).map(fn(item: Docgen.TocItem) -> Docgen.Meta {
       let children = item.children.map(|child: Docgen.TocItem| Docgen.Fields([("name", Docgen.Text(child.title)), ("href", Docgen.Text(child.href.replace(".html", extension)))]))
       Docgen.Fields([("name", Docgen.Text(item.title)), ("href", Docgen.Text(item.href.replace(".html", extension))), ("items", Docgen.Items(children))])
@@ -64,7 +64,8 @@ fn moduleMarkdown(unit: &Model.Unit) -> Str {
   if !unit.doc.isEmpty() { lines = lines.push(unit.doc).push("") }
   for member in unit.members {
     if Model.isType(member.kind) {
-      lines = lines.push("- <xref:" + member.uid + ">: " + Model.summary(member.doc))
+      let summary = Model.summary(member.doc)
+      lines = lines.push("- <xref:" + member.uid + ">" + (if summary.isEmpty() { "" } else { ": " + summary }))
     }
   }
   for member in unit.members {

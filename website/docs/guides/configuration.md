@@ -62,6 +62,7 @@ The first mapping that selects a file wins.
 | `resource` | mappings | none | Files copied to the output unchanged. |
 | `overwrite` | mappings | none | [Overwrite files](concepts.md#overwrite-files) that amend pages by uid. |
 | `xref` | list of paths or addresses | none | [Cross-reference maps](cross-references.md#cross-reference-maps) of other sites. |
+| `xrefService` | list of addresses holding `{uid}` | none | [Reference services](cross-references.md#reference-services) asked for identities nothing else resolves. |
 | `groups` | object | none | Named sets of `dest` and metadata that mappings refer to with `group`. |
 
 ### Output

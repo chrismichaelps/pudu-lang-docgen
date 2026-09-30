@@ -11,7 +11,7 @@
       ],
       "dest": "api",
       "namespaceLayout": "nested",
-      "sourceUrl": "https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/examples/site/{path}#L{line}"
+      "sourceUrl": "https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/examples/site/src/{path}#L{line}"
     }
   ],
   "build": {

@@ -1,4 +1,4 @@
-/** @Docgen.Docset.Tools — git history, diagram rendering, and remote reference maps */
+/** @Docgen.Docset.Tools — git history, diagram rendering, remote reference maps, and reference services */
 module PuduLangDocgen.Docset.Tools
 
 import Std.Bytes as Bytes
@@ -77,6 +77,39 @@ export fn references(base: Str, sources: &Array[Str]) -> (Array[Docgen.Reference
         case Err(reason) => { problems = problems.push(Docgen.warning(Codes.XREF_UNAVAILABLE, source, 1, reason)) }
       }
       case Err(reason) => { problems = problems.push(Docgen.warning(Codes.XREF_UNAVAILABLE, source, 1, reason)) }
+    }
+  }
+  (found, problems)
+}
+
+/// References that reference services know for identities a build left unresolved. Services
+/// are asked in order; the first to answer for an identity is kept, and a service that
+/// fails is reported once and not asked again.
+export fn consult(services: &Array[Str], wanted: &Array[Str]) -> (Array[Docgen.Reference], Array[Docgen.Diagnostic]) {
+  var found: Array[Docgen.Reference] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  var failing: Array[Str] = []
+  for uid in *wanted {
+    for service in *services {
+      if failing.contains(service) { continue }
+      let address = References.serviceAddress(service, uid)
+      let answered = match fetch(address) {
+        case Ok(text) => References.parse(address, text)
+        case Err(reason) => Err(reason)
+      }
+      match answered {
+        case Ok(read) => {
+          let matching = read.filter(|reference: Docgen.Reference| reference.uid == uid)
+          if !matching.isEmpty() {
+            found = found.push(matching[0])
+            break
+          }
+        }
+        case Err(reason) => {
+          failing = failing.push(service)
+          problems = problems.push(Docgen.warning(Codes.XREF_UNAVAILABLE, service, 1, reason))
+        }
+      }
     }
   }
   (found, problems)

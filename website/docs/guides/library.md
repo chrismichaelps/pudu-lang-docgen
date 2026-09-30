@@ -60,7 +60,7 @@ Use <xref:PuduLangDocgen.Build.extensions> when you need none.
 
 ### Page transforms
 
-A page transform returns the page it is given, changed or not. The `kind` of a page is `article`, `rest`, `api-page`, `catalog`, `redirect`, or `not-found` for content, and `api-module`, `api-type`, or `api-member` for generated Pudu reference pages. A transform can use it to target one family of pages; the layout also exposes it as a `kind-<kind>` class on the page body.
+A page transform returns the page it is given, changed or not. The `kind` of a page is `article`, `rest`, `api-page`, `catalog`, `landing`, `redirect`, or `not-found` for content, and `api-module`, `api-type`, or `api-member` for generated Pudu reference pages. A transform can use it to target one family of pages; the layout also exposes it as a `kind-<kind>` class on the page body.
 
 [!code-pudu[](samples/CustomBuild.pudu#transform "A page transform")]
 

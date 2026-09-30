@@ -39,6 +39,7 @@ The kind of a content file decides how it is read:
 | YAML or JSON with an `openapi` or `swagger` key | An [HTTP API reference](http-api.md) page. |
 | YAML or JSON whose first line is `#YamlMime:ApiPage` | A structured API page. |
 | YAML whose first line contains `YamlMime:Dashboard` | A catalog page of cards. |
+| YAML whose first line contains `YamlMime:Landing` | A [landing page](templates.md#landing-pages) with a banner and topic lists. |
 
 Any other selected file is reported with `DG603` and skipped; list it as a resource instead.
 

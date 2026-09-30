@@ -1,5 +1,5 @@
 - name: Home
-  href: index.md
+  href: index.yml
 - name: Docs
   href: guides/
 - name: API

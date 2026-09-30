@@ -21,7 +21,7 @@ const LAYOUT: Array[Str] = [
   "</main>",
   "\{\{#showAffix\}\}\{\{>affix\}\}\{\{/showAffix\}\}",
   "</div>",
-  "\{\{^chromeless\}\}\{\{>footer\}\}\{\{/chromeless\}\}",
+  "\{\{#showFooter\}\}\{\{>footer\}\}\{\{/showFooter\}\}",
   "\{\{>scripts\}\}",
   "</body>",
   "</html>"
@@ -54,7 +54,11 @@ const PARTIAL_BREADCRUMB: Array[Str] = [
 /// The `partials/footer.html` template.
 const PARTIAL_FOOTER: Array[Str] = [
   "<footer class=\"site-footer\">",
-  "<div class=\"footer-inner\">\{\{\{footer\}\}\}</div>",
+  "<div class=\"footer-inner\">\{\{#footer\}\}\{\{\{footer\}\}\}\{\{/footer\}\}\{\{^footer\}\}<div class=\"footer-bar\">",
+  "<span class=\"footer-name\">\{\{siteName\}\}</span>",
+  "\{\{#hasFooterLinks\}\}<nav class=\"footer-links\" aria-label=\"\{\{text.footer\}\}\"><ul>\{\{#footerLinks\}\}<li><a href=\"\{\{href\}\}\">\{\{name\}\}</a></li>\{\{/footerLinks\}\}</ul></nav>\{\{/hasFooterLinks\}\}",
+  "\{\{#copyright\}\}<p class=\"footer-copyright\">\{\{copyright\}\}</p>\{\{/copyright\}\}",
+  "</div>\{\{/footer\}\}</div>",
   "</footer>"
 ]
 
@@ -103,13 +107,14 @@ const PARTIAL_HEADER: Array[Str] = [
   "<div class=\"header-inner\">",
   "\{\{#showToc\}\}<button type=\"button\" class=\"icon-button menu-toggle\" aria-controls=\"sidebar\" aria-expanded=\"false\" aria-label=\"\{\{text.menu\}\}\"><svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M1 3h14v1.5H1zm0 4.25h14v1.5H1zM1 11.5h14V13H1z\"/></svg></button>\{\{/showToc\}\}",
   "<a class=\"brand\" href=\"\{\{logoUrl\}\}\">\{\{#logo\}\}<img class=\"brand-logo\" src=\"\{\{logo\}\}\" alt=\"\" width=\"24\" height=\"24\">\{\{/logo\}\}<span class=\"brand-name\">\{\{siteName\}\}</span></a>",
-  "\{\{#showNavbar\}\}<nav class=\"navbar\" aria-label=\"\{\{text.primary\}\}\"><ul>\{\{#navbar\}\}<li><a href=\"\{\{href\}\}\"\{\{#active\}\} aria-current=\"true\" class=\"active\"\{\{/active\}\}>\{\{name\}\}</a></li>\{\{/navbar\}\}</ul></nav>\{\{/showNavbar\}\}",
+  "\{\{#showNavbar\}\}<nav id=\"navbar\" class=\"navbar\" aria-label=\"\{\{text.primary\}\}\"><ul>\{\{#navbar\}\}<li><a href=\"\{\{href\}\}\"\{\{#active\}\} aria-current=\"true\" class=\"active\"\{\{/active\}\}>\{\{name\}\}</a></li>\{\{/navbar\}\}</ul></nav>\{\{/showNavbar\}\}",
   "<div class=\"header-tools\">",
   "\{\{#searchEnabled\}\}<div class=\"search\" role=\"search\">",
   "<svg class=\"search-icon\" viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M6.5 1a5.5 5.5 0 0 1 4.38 8.82l3.65 3.65-1.06 1.06-3.65-3.65A5.5 5.5 0 1 1 6.5 1zm0 1.5a4 4 0 1 0 0 8 4 4 0 0 0 0-8z\"/></svg>",
   "<input id=\"search-input\" type=\"search\" placeholder=\"\{\{text.search\}\}\" aria-label=\"\{\{text.search\}\}\" autocomplete=\"off\" spellcheck=\"false\" aria-controls=\"search-results\" aria-expanded=\"false\">",
   "<div id=\"search-results\" class=\"search-results\" role=\"listbox\" hidden></div>",
   "</div>\{\{/searchEnabled\}\}",
+  "\{\{#showNavbar\}\}<button type=\"button\" class=\"icon-button nav-toggle\" aria-controls=\"navbar\" aria-expanded=\"false\" aria-label=\"\{\{text.primary\}\}\"><svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M2 6.5h2.5V9H2zm4.75 0h2.5V9h-2.5zm4.75 0H14V9h-2.5z\"/></svg></button>\{\{/showNavbar\}\}",
   "<button type=\"button\" class=\"icon-button theme-toggle\" aria-label=\"\{\{text.theme\}\}\" title=\"\{\{text.theme\}\}\"><svg viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M8 1a7 7 0 1 0 0 14A7 7 0 0 0 8 1zm0 1.5v11a5.5 5.5 0 0 1 0-11z\"/></svg></button>",
   "</div>",
   "</div>",

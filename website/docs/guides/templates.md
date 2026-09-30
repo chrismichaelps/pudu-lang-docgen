@@ -21,7 +21,9 @@ Set these keys in `build.globalMetadata` for the whole site, in `fileMetadata` f
 | `_appLogoUrl` | Where the logo links. Defaults to the site's home page. |
 | `_appFaviconPath` | The browser tab icon. |
 | `_appTouchIconPath` | The icon used when the site is added to a home screen. |
-| `_appFooter` | HTML for the footer. Only safe elements and attributes are kept. |
+| `_appFooter` | HTML for the footer. Only safe elements and attributes are kept. When set, it replaces the footer below. |
+| `_footerLinks` | Footer links as a list of objects with `name` and `href`. Unsafe or incomplete entries are left out. |
+| `_copyright` | The copyright holder shown in the footer as `© <year> <holder>`, dated by the year of the build. |
 | `_themeColor` | The browser interface color on supporting devices. |
 | `_lang` | The page language, such as `en`. It also selects the interface text language. |
 
@@ -34,6 +36,7 @@ Set these keys in `build.globalMetadata` for the whole site, in `fileMetadata` f
 | `_disableAffix` | Hide the **In this article** outline. |
 | `_disableBreadcrumb` | Hide the breadcrumb trail. |
 | `_disableNavbar` | Hide the top navigation. |
+| `_disableFooter` | Hide the page footer. |
 | `_disableTocFilter` | Hide the sidebar filter box. |
 | `_disableNextArticle` | Hide the previous and next links. |
 | `_disableContribution` | Hide the **Edit this page** link. |
@@ -70,6 +73,58 @@ This site's identity is set entirely through `globalMetadata`:
   "_lang": "en"
 }
 ```
+
+## Landing pages
+
+A YAML file whose first line contains `YamlMime:Landing` becomes a hub page on the `landing` layout: a banner across the full width of the page, then highlighted entry points, topic lists, and related links. Addresses are checked like links in articles, so a missing page is reported.
+
+```yaml
+### YamlMime:Landing
+title: Inventory service documentation
+summary: Everything needed to run and extend the inventory service.
+metadata:
+  uid: home
+  description: Guides and reference for the inventory service.
+
+highlightedContent:
+  items:
+  - title: What is the inventory service?
+    itemType: overview
+    url: guide/introduction.md
+  - title: Release notes
+    itemType: whats-new
+    url: https://example.org/releases
+
+conceptualContent:
+  title: Explore
+  items:
+  - title: Operate
+    links:
+    - text: Deploying
+      url: guide/deploy.md
+    footerLink:
+      text: All operations guides
+      url: guide/index.md
+
+additionalContent:
+  sections:
+  - title: Related content
+    items:
+    - title: Pudu
+      summary: The language the service is written in.
+      url: https://www.pudu-lang.org/
+```
+
+| Key | Description |
+| --- | --- |
+| `title` | The banner heading and the page title. Required. |
+| `summary` | The text under the banner heading. |
+| `metadata` | Page metadata, like an article's front matter. |
+| `highlightedContent.items` | Entry points with a `title`, a `url`, and an `itemType` of `overview`, `get-started`, `quickstart`, `concept`, `tutorial`, `how-to-guide`, `reference`, `whats-new`, `download`, `deploy`, `architecture`, or `sample`. |
+| `conceptualContent` | An optional `title` and `items`, each a topic with a `title`, a list of `links` with `text` and `url`, and an optional `footerLink`. |
+| `additionalContent.sections` | Sections with a `title` and `items`, each with a `title`, a `summary`, and a `url`. |
+
+The banner colors come from the `--hero-bg` custom property, which a template's `public/main.css` can set.
 
 ## Template folders
 

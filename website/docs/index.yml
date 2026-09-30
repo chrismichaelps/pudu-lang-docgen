@@ -1,0 +1,97 @@
+### YamlMime:Landing
+title: Pudu Documentation Generator
+summary: Publish documentation for Pudu projects. Write articles in Markdown, generate reference pages from the public declarations of your Pudu modules and from OpenAPI descriptions, and ship one static website with navigation, cross references, search, and printable PDF documents. This site is built with it.
+metadata:
+  uid: home
+  description: Turn Markdown articles, Pudu source declarations, and OpenAPI descriptions into a searchable static documentation website.
+
+highlightedContent:
+  items:
+  - title: What is pudu-lang-docgen?
+    itemType: overview
+    url: guides/introduction.md
+  - title: Build your first site
+    itemType: quickstart
+    url: guides/quick-start.md
+  - title: Basic concepts
+    itemType: concept
+    url: guides/concepts.md
+  - title: Pudu API reference
+    itemType: reference
+    url: guides/api-reference.md
+  - title: Deploy a site
+    itemType: deploy
+    url: guides/deploying.md
+  - title: Releases
+    itemType: whats-new
+    url: https://github.com/chrismichaelps/pudu-lang-docgen/releases
+
+conceptualContent:
+  title: Explore the documentation
+  items:
+  - title: Author content
+    links:
+    - text: Markdown authoring
+      url: guides/markdown.md
+    - text: Tables of contents
+      url: guides/tables-of-contents.md
+    - text: Links and cross references
+      url: guides/cross-references.md
+  - title: Reference content
+    links:
+    - text: Pudu API reference
+      url: guides/api-reference.md
+    - text: HTTP API reference
+      url: guides/http-api.md
+    - text: "Sample: Inventory service"
+      url: guides/inventory-service.yml
+  - title: Customize and publish
+    links:
+    - text: Configuration reference
+      url: guides/configuration.md
+    - text: Templates and theming
+      url: guides/templates.md
+    - text: Search and SEO
+      url: guides/search-and-seo.md
+    - text: PDF output
+      url: guides/pdf.md
+  - title: Command line and library
+    links:
+    - text: Command-line reference
+      url: guides/commands/index.md
+    - text: Build a site
+      url: guides/commands/build.md
+    - text: Preview while writing
+      url: guides/commands/serve.md
+    - text: Library usage
+      url: guides/library.md
+    footerLink:
+      text: Diagnostics reference
+      url: guides/diagnostics.md
+  - title: Extend
+    links:
+    - text: Extensions overview
+      url: extensions/index.md
+    - text: Templates
+      url: extensions/templates.yml
+    - text: Packages
+      url: extensions/packages.yml
+    - text: Tools
+      url: extensions/tools.yml
+
+additionalContent:
+  sections:
+  - title: Related content
+    items:
+    - title: Pudu
+      summary: The statically typed language pudu-lang-docgen is written in and documents.
+      url: https://www.pudu-lang.org/
+    - title: pudu-lang-log
+      summary: Structured event logging for Pudu. The command line reports its diagnostics through it.
+      url: https://github.com/chrismichaelps/pudu-lang-log
+    - title: pudu-lang-validator
+      summary: Typed validation for Pudu. Configuration files are checked with its rules.
+      url: https://github.com/chrismichaelps/pudu-lang-validator
+    - title: Source code
+      summary: Issues, releases, and the source of pudu-lang-docgen.
+      url: https://github.com/chrismichaelps/pudu-lang-docgen

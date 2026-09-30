@@ -2,6 +2,7 @@
 module PuduLangDocgen.ApiTest
 
 import Std.Io as Io
+import Std.Result as Result
 import Std.Test as Test
 import PuduLangDocgen.Api.Catalog as Catalog
 import PuduLangDocgen.Api.Lexer as Lexer
@@ -11,6 +12,7 @@ import PuduLangDocgen.Api.Parser as Parser
 import PuduLangDocgen.Api.Signature as Signature
 import PuduLangDocgen as Docgen
 import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Yaml as Yaml
 
 /// A module exercising every declaration form.
 fn shapesSource() -> Str {
@@ -66,7 +68,7 @@ const UNITS: Str = "module Demo.Units\n\n/// A length in millimetres.\nexport ty
 
 /// Catalog options publishing under `api` with source links.
 fn options() -> Catalog.Options {
-  Catalog.Options{dest: "api", includePrivate: false, include: [], exclude: [], sourceUrl: "https://src.example/\{path\}#L\{line\}", nested: false, separate: false}
+  Catalog.Options{..Catalog.defaults(), sourceUrl: "https://src.example/\{path\}#L\{line\}"}
 }
 
 /// The demo modules as selected for publication.
@@ -140,6 +142,16 @@ fn main() -> Int {
       Test.that("field docs rendered", body("api/Demo.Shapes.Point.html").contains("<p>Horizontal position.</p>")),
       Test.equals("nested module navigation", &Catalog.toc(&units(), &Catalog.Options{..options(), nested: true}).map(|item: Docgen.TocItem| (item.title, item.href, item.children.map(|child: Docgen.TocItem| child.title))), &[("Demo", "", ["Shapes", "Units"])]),
       Test.equals("separate member pages", &Catalog.references(&units(), &Catalog.Options{..options(), separate: true}).filter(|reference: Docgen.Reference| reference.uid == "Demo.Shapes.area").map(|reference: Docgen.Reference| reference.href), &["api/Demo.Shapes.area.html"]),
+      Test.that("plain documentation", {
+          let (found, _problems) = Pages.pages(&units()[0], &Pages.Context{..context(), options: Catalog.Options{..options(), skipMarkup: true}})
+          found[0].body.contains("<p>The area of a shape in square units.</p>") && found[0].body.contains("## Examples")
+        }),
+      Test.equals("filter rules", &match Catalog.rules(&Result.unwrapOr(Yaml.decode("apiRules:\n- exclude:\n    uidRegex: \\.area$\n    type: Function\n- include:\n    uidRegex: .*"), Docgen.Nothing)) { case Ok(found) => Catalog.select(&[shapes], &Catalog.Options{..options(), rules: found})[0].members.map(|member: Model.Member| member.name) case Err(reason) => [reason] }, &["Shape", "Point", "Width", "Measured", "LIMIT"]),
+      Test.equals("bad filter", &match Catalog.rules(&Docgen.Fields([("apiRules", Docgen.Items([Docgen.Fields([("exclude", Docgen.Fields([("uidRegex", Docgen.Text("("))]))])]))])) { case Ok(_) => "accepted" case Err(reason) => reason.take(9) }, &"uidRegex "),
+      Test.equals("category labels", &Catalog.toc(&units(), &Catalog.Options{..options(), categories: "flattened"})[0].children.map(|item: Docgen.TocItem| item.title), &["Types", "Point", "Shape", "Width", "Traits", "Measured"]),
+      Test.equals("category groups", &Catalog.toc(&units(), &Catalog.Options{..options(), categories: "nested"})[0].children.map(|item: Docgen.TocItem| (item.title, item.children.length())), &[("Types", 3), ("Traits", 1)]),
+      Test.equals("alphabetic variants", &Catalog.select(&[Parser.parse("a.pudu", "module A\nexport type T = Zed | Alpha")], &Catalog.Options{..options(), alphabetic: true})[0].members[0].members.map(|member: Model.Member| member.name), &["Alpha", "Zed"]),
+      Test.equals("source links excluded", &Catalog.sourceLink(&Catalog.Options{..options(), sourceExclude: ["src/**"]}, "src/a.pudu", 1), &""),
       Test.equals("kind names", &[Pages.kindName("union"), Pages.kindName("alias"), Pages.kindName("other")], &["Union", "Type alias", "other"])
     ])
   let ran = Test.run(&checks)

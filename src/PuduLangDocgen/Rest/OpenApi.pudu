@@ -89,7 +89,7 @@ export fn read(value: &Docgen.Meta) -> Result[Service, Str] {
   let definitions = if Meta.get(&root, "swagger") != None { Meta.fieldsOf(&root, "definitions") } else { Meta.fieldsOf(&Meta.fieldsOf(&root, "components"), "schemas") }
   var schemas: Array[Schema] = []
   for (name, held) in definitions { schemas = schemas.push(schema(name, &held)) }
-  let sorted = List.sortBy(&schemas, |left: Schema, right: Schema| left.name < right.name)
+  let sorted = List.sortOn(&schemas, |held: Schema| held.name)
   Ok(Service{title: title, version: Meta.textOr(&info, "version", ""), description: Meta.textOr(&info, "description", ""), servers: servers, operations: operations, schemas: sorted})
 }
 

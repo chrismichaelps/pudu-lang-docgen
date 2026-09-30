@@ -13,6 +13,7 @@ import PuduLangDocgen.Api.Export as Export
 import PuduLangDocgen.Api.Model as Model
 import PuduLangDocgen.Api.Parser as Parser
 import PuduLangDocgen.Build as Build
+import PuduLangDocgen.Build.Site as Site
 import PuduLangDocgen.Build.Sources as Sources
 import PuduLangDocgen.Configuration as Configuration
 import PuduLangDocgen.Constants.Codes as Codes
@@ -24,6 +25,8 @@ import PuduLangDocgen.Docset.Tools as Tools
 import PuduLangDocgen.Docset.Walk as Walk
 import PuduLangDocgen.Markdown as Markdown
 import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.References as References
+import PuduLangDocgen.Yaml as Yaml
 
 /** @Docgen.Docset.Options — command-line choices layered over the configuration */
 export type Options = {
@@ -71,12 +74,37 @@ export fn load(configFile: Str, chosen: &Options) -> Result[Loaded, Array[Docgen
   let (files, textProblems) = closure(base, &wanted)
   problems = problems.concat(textProblems)
   var units: Array[Array[Model.Unit]] = []
+  var sources: Array[Configuration.ApiSource] = []
   for source in config.metadata {
-    var parsed: Array[Model.Unit] = []
-    for (path, _output) in Sources.mapped(&source.mappings, &paths, &skip) {
-      match Walk.text(base, path) {
-        case Ok(held) => { parsed = parsed.push(Parser.parse(path, held)) }
+    var chosenRules: Array[Catalog.Rule] = []
+    if !source.filterFile.isEmpty() {
+      match Walk.text(base, source.filterFile) {
+        case Ok(held) => match Yaml.decode(held) {
+          case Ok(value) => match Catalog.rules(&value) {
+            case Ok(found) => { chosenRules = found }
+            case Err(reason) => { problems = problems.push(Docgen.error(Codes.CONFIG_INVALID, source.filterFile, 1, reason)) }
+          }
+          case Err(reason) => { problems = problems.push(Docgen.error(Codes.CONFIG_UNREADABLE, source.filterFile, 1, reason)) }
+        }
         case Err(problem) => { problems = problems.push(problem) }
+      }
+    }
+    sources = sources.push(Configuration.ApiSource{..source, options: Catalog.Options{..source.options, rules: chosenRules}})
+    var parsed: Array[Model.Unit] = []
+    for mapping in source.mappings {
+      let folder = Path.normalize(Path.join(base, mapping.src))
+      let found = match Walk.files(folder, &[]) {
+        case Ok(held) => held
+        case Err(more) => {
+          problems = problems.concat(more)
+          []
+        }
+      }
+      for (path, _output) in Sources.mapped(&[Configuration.Mapping{..mapping, src: ""}], &found, &[]) {
+        match Walk.text(folder, path) {
+          case Ok(held) => { parsed = parsed.push(Parser.parse(path, held)) }
+          case Err(problem) => { problems = problems.push(problem) }
+        }
       }
     }
     units = units.push(parsed)
@@ -94,11 +122,11 @@ export fn load(configFile: Str, chosen: &Options) -> Result[Loaded, Array[Docgen
   problems = problems.concat(xrefProblems)
   var diagrams: Map[Str, Str] = mapOf([])
   if config.diagrams.local {
-    var sources: Array[Str] = []
+    var drawings: Array[Str] = []
     for (path, held) in Map.pairs(&files) {
-      if path.toLower().endsWith(".md") { sources = sources.concat(Markdown.diagrams(&Markdown.parse(path, held, &files, &[]).blocks)) }
+      if path.toLower().endsWith(".md") { drawings = drawings.concat(Markdown.diagrams(&Markdown.parse(path, held, &files, &[]).blocks)) }
     }
-    let (drawn, diagramProblems) = Tools.diagrams(&sources, &config.diagrams)
+    let (drawn, diagramProblems) = Tools.diagrams(&drawings, &config.diagrams)
     diagrams = drawn
     problems = problems.concat(diagramProblems)
   }
@@ -108,8 +136,19 @@ export fn load(configFile: Str, chosen: &Options) -> Result[Loaded, Array[Docgen
     case Ok(found) => found
     case Err(_) => ""
   }
-  let input = Build.Input{config: config, paths: paths, files: files, resources: copied, units: units, external: external, template: template, assets: assets, history: history, repository: repository, diagrams: diagrams, generator: Package.VERSION, today: today}
-  Ok(Loaded{base: base, input: input, diagnostics: problems})
+  if Docgen.failed(&problems) { return Err(problems) }
+  let input = Build.Input{config: Configuration.Config{..config, metadata: sources}, paths: paths, files: files, resources: copied, units: units, external: external, template: template, assets: assets, history: history, repository: repository, diagrams: diagrams, generator: Package.VERSION, today: today}
+  if config.xrefService.isEmpty() { return Ok(Loaded{base: base, input: input, diagnostics: problems}) }
+  let (served, serviceProblems) = Tools.consult(&config.xrefService, &References.unresolved(&trial(&input)))
+  Ok(Loaded{base: base, input: Build.Input{..input, external: external.concat(served)}, diagnostics: problems.concat(serviceProblems)})
+}
+
+/// Every diagnostic of a build of the input, whether or not it succeeds.
+fn trial(input: &Build.Input) -> Array[Docgen.Diagnostic] {
+  match Build.plan(input, &Build.extensions()) {
+    case Ok(planned) => planned.diagnostics
+    case Err(problems) => problems
+  }
 }
 
 /// A project built and, unless the run is dry, published incrementally.
@@ -126,6 +165,32 @@ export fn build(configFile: Str, chosen: &Options, extending: &Build.Extensions)
   }
   let state = Path.join(Path.join(loaded.base, Package.STATE_FOLDER), "build.json")
   Publish.publish(Path.join(loaded.base, loaded.input.config.output), &all, state, chosen.force)
+}
+
+/// The site built and published, then a PDF for every table of contents that sets `pdf`. Unlike
+/// `pdf`, a missing renderer is a warning here, so sites build on machines without a browser.
+export fn buildAll(configFile: Str, chosen: &Options) -> Result[(Docgen.Report, Array[Str]), Array[Docgen.Diagnostic]] {
+  let loaded = load(configFile, chosen) ?
+  let built = match Build.site(&loaded.input, &Build.extensions()) {
+    case Ok(found) => found
+    case Err(problems) => { return Err(loaded.diagnostics.concat(problems)) }
+  }
+  let all = Docgen.Plan{..built.plan, diagnostics: loaded.diagnostics.concat(built.plan.diagnostics)}
+  if loaded.input.config.dryRun {
+    let planned = all.artifacts.map(|artifact: Docgen.Artifact| artifact.path).concat(all.resources.map(|resource: Docgen.Resource| resource.path))
+    return Ok((Docgen.Report{written: [], unchanged: planned, removed: [], diagnostics: all.diagnostics}, []))
+  }
+  let state = Path.join(Path.join(loaded.base, Package.STATE_FOLDER), "build.json")
+  let report = Publish.publish(Path.join(loaded.base, loaded.input.config.output), &all, state, chosen.force) ?
+  if built.books.filter(|book: Site.Book| Meta.flag(&book.meta, "pdf")).isEmpty() { return Ok((report, [])) }
+  let renderer = match loaded.input.config.pdf {
+    case Some(settings) => settings.renderer
+    case None => []
+  }
+  match Tasks.pdf(loaded.base, &Build.Built{..built, plan: all}, loaded.input.config.output, &renderer) {
+    case Ok(produced) => Ok((report, produced))
+    case Err(problems) => Ok((Docgen.Report{..report, diagnostics: report.diagnostics.concat(problems.map(|problem: Docgen.Diagnostic| Docgen.Diagnostic{..problem, severity: Docgen.Warning}))}, []))
+  }
 }
 
 /// The site built and published, then a PDF for every table of contents that sets `pdf`.
@@ -223,13 +288,13 @@ fn closure(base: Str, wanted: &Array[Str]) -> (Map[Str, Str], Array[Docgen.Diagn
 }
 
 /// Template overrides and public assets from each template folder in order; later folders
-/// replace files of earlier ones. The built-in `default` and `modern` names add nothing.
+/// replace files of earlier ones. Built-in template names add no files.
 fn templates(base: Str, names: &Array[Str]) -> (Array[(Str, Str)], Array[Docgen.Resource], Array[Docgen.Diagnostic]) {
   var texts: Array[(Str, Str)] = []
   var assets: Array[Docgen.Resource] = []
   var problems: Array[Docgen.Diagnostic] = []
   for name in *names {
-    if name == "default" || name == "modern" { continue }
+    if Package.BUILT_IN_TEMPLATES.contains(name) { continue }
     let folder = Path.join(base, name)
     match Walk.files(folder, &[]) {
       case Ok(paths) => {

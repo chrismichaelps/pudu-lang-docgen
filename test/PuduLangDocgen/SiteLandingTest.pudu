@@ -1,0 +1,102 @@
+/** @Docgen.Site.LandingTests — hub pages render banners, highlights, topic lists, and site footers */
+module PuduLangDocgen.SiteLandingTest
+
+import Std.Io as Io
+import Std.Result as Result
+import Std.Test as Test
+import PuduLangDocgen.Build as Build
+import PuduLangDocgen.Configuration as Configuration
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Site.Landing as Landing
+import PuduLangDocgen.Yaml as Yaml
+
+/// A hub page using every section.
+const HUB: Str = "### YamlMime:Landing\ntitle: Widget documentation\nmetadata:\n  description: All about widgets.\nsummary: Build <widgets> fast.\nhighlightedContent:\n  items:\n  - title: What is a widget?\n    itemType: overview\n    url: guide.md\n  - title: Releases\n    itemType: whats-new\n    url: https://example.org/releases\nconceptualContent:\n  title: Explore\n  items:\n  - title: Write\n    links:\n    - text: Guide\n      url: guide.md#start\n    footerLink:\n      text: More\n      url: guide.md\nadditionalContent:\n  sections:\n  - title: Related content\n    items:\n    - title: Pudu\n      summary: The language.\n      url: https://www.pudu-lang.org/\n"
+
+/// Project files of the sample site.
+fn files() -> Array[(Str, Str)] {
+  [("docs/index.yml", HUB), ("docs/guide.md", "# Guide\n\n## Start\n\nText."), ("docs/toc.yml", "- name: Home\n  href: index.yml\n- name: Guide\n  href: guide.md")]
+}
+
+/// The sample site's configuration with footer metadata.
+fn config() -> Configuration.Config {
+  let text = "\{\"build\": \{\"content\": [\{\"files\": [\"**/*.md\", \"**/*.yml\"], \"src\": \"docs\"\}], \"globalMetadata\": \{\"_appName\": \"Widgets\", \"_copyright\": \"Widget Team\", \"_footerLinks\": [\{\"name\": \"License\", \"href\": \"https://example.org/license\"\}, \{\"name\": \"Guide\", \"href\": \"guide.html\"\}, \{\"name\": \"Bad\", \"href\": \"javascript:x\"\}, \{\"name\": \"\", \"href\": \"x.html\"\}]\}\}\}"
+  Result.unwrapOr(Configuration.parse("docgen.json", text), Configuration.defaults())
+}
+
+/// The published text of a path in the sample site.
+fn published(path: Str) -> Str {
+  let all = files()
+  var paths: Array[Str] = []
+  for (held, _text) in all { paths = paths.push(held) }
+  let input = Build.Input {
+    config: config(), paths: paths, files: mapOf(all), resources: [], units: [], external: [], template: [], assets: [], history: mapOf([]),
+    repository: Configuration.Contribution{repo: "https://github.com/example/docs", branch: "main", path: ""}, diagrams: mapOf([]), generator: "0.1.0", today: "2026-09-29"
+  }
+  match Build.plan(&input, &Build.extensions()) {
+    case Ok(plan) => {
+      for artifact in plan.artifacts {
+        if artifact.path == path { return artifact.content }
+      }
+      "missing " + path
+    }
+    case Err(problems) => problems.map(|problem: Docgen.Diagnostic| Docgen.describe(&problem)).join("\n")
+  }
+}
+
+/// Scope of a page at the site root that knows one published guide.
+fn located() -> Phrase.Scope {
+  Phrase.Scope{page: "index.html", source: "index.yml", outputs: mapOf([("guide.md", "guide.html")]), references: mapOf([]), settings: Phrase.rendering()}
+}
+
+/// A landing file rendered directly, or its refusal.
+fn rendered(text: Str) -> Result[Landing.Rendered, Str] {
+  Landing.render(&Yaml.decode(text) ?, &located())
+}
+
+/// The refusal of a landing file, or `accepted`.
+fn refused(text: Str) -> Str {
+  match rendered(text) {
+    case Ok(_) => "accepted"
+    case Err(reason) => reason
+  }
+}
+
+/// Runs every hub page and footer contract.
+fn main() -> Int {
+  let home = published("index.html")
+  let guide = published("guide.html")
+  let direct = Result.unwrapOr(rendered(HUB), Landing.Rendered{title: "", body: "", headings: [], links: [], diagnostics: []})
+  let broken = Result.unwrapOr(rendered("title: T\nhighlightedContent:\n  items:\n  - title: Gone\n    itemType: concept\n    url: gone.md\n"), Landing.Rendered{title: "", body: "", headings: [], links: [], diagnostics: []})
+  let checks = Test.suite("Site landing", &[
+      Test.that("landing layout", home.contains("class=\"kind-landing layout-landing\"")),
+      Test.that("declared metadata", home.contains("<meta name=\"description\" content=\"All about widgets.\">")),
+      Test.that("banner with escaped summary", home.contains("<section class=\"landing-hero\">") && home.contains("<h1 id=\"widget-documentation\">Widget documentation</h1>") && home.contains("<p class=\"landing-summary\">Build &lt;widgets&gt; fast.</p>")),
+      Test.that("highlight card", direct.body.contains("<li class=\"landing-highlight\"><a href=\"guide.html\"><span class=\"landing-kind\">Overview</span><span class=\"landing-link\">What is a widget?</span></a></li>")),
+      Test.that("remote highlight kept", direct.body.contains("<a href=\"https://example.org/releases\">") && direct.body.contains("<span class=\"landing-link\">Releases</span>")),
+      Test.that("topic card", direct.body.contains("<article class=\"landing-card\"><h3>Write</h3><ul><li><a href=\"guide.html#start\">Guide</a></li></ul><p class=\"landing-more\"><a href=\"guide.html\">More</a></p></article>")),
+      Test.that("related card", direct.body.contains("<h3><a href=\"https://www.pudu-lang.org/\">Pudu</a></h3><p>The language.</p>")),
+      Test.equals("outline", &direct.headings.map(|held: Docgen.Heading| (held.id, held.level)), &[("widget-documentation", 1), ("explore", 2), ("related-content", 2)]),
+      Test.equals("links recorded for checks", &direct.links.map(|held: Docgen.Link| held.target), &["guide.html", "guide.html#start", "guide.html"]),
+      Test.equals("missing page reported", &broken.diagnostics.map(|held: Docgen.Diagnostic| held.code), &[Codes.LINK_BROKEN]),
+      Test.that("no page actions on landing pages", !home.contains("class=\"page-actions\"")),
+      Test.that("page actions on articles", guide.contains("class=\"page-actions\"")),
+      Test.that("footer links from metadata", guide.contains("<nav class=\"footer-links\" aria-label=\"Footer\">") && guide.contains("<li><a href=\"https://example.org/license\">License</a></li>") && guide.contains("<li><a href=\"guide.html\">Guide</a></li>")),
+      Test.that("unsafe and nameless footer links dropped", !guide.contains("javascript:") && !guide.contains("href=\"x.html\"")),
+      Test.that("copyright dated by the build", guide.contains("<p class=\"footer-copyright\">© 2026 Widget Team</p>")),
+      Test.that("navigation toggle", guide.contains("class=\"icon-button nav-toggle\" aria-controls=\"navbar\"") && guide.contains("<nav id=\"navbar\" class=\"navbar\"")),
+      Test.equals("needs an object", &refused("- a"), &"landing page must be an object"),
+      Test.equals("needs a title", &refused("summary: s"), &"landing page needs a title"),
+      Test.equals("known item types", &refused("title: T\nhighlightedContent:\n  items:\n  - title: X\n    itemType: poster\n    url: a.md"), &"highlighted item has an unknown itemType: poster"),
+      Test.equals("highlights need titles", &refused("title: T\nhighlightedContent:\n  items:\n  - itemType: overview\n    url: guide.md"), &"each highlighted item needs a title"),
+      Test.equals("topic links need text", &refused("title: T\nconceptualContent:\n  items:\n  - title: A\n    links:\n    - url: guide.md"), &"each topic link needs a text"),
+      Test.equals("lists must be lists", &refused("title: T\nadditionalContent:\n  sections: x"), &"sections must be a list"),
+      Test.equals("list entries must be objects", &refused("title: T\nconceptualContent:\n  items:\n  - x"), &"each topic must be an object"),
+      Test.equals("banner alone", &Result.map(rendered("title: T"), |found: Landing.Rendered| found.body), &Ok("<section class=\"landing-hero\"><div class=\"landing-inner\"><h1 id=\"t\">T</h1></div></section>"))
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

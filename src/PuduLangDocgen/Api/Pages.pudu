@@ -67,6 +67,10 @@ fn section(body: Body, level: Int, id: Str, title: Str) -> Body {
 /// Documentation rendered as HTML with headings demoted below the page's own sections.
 fn documentation(body: Body, text: Str, unit: &Model.Unit, page: Str, line: Int, context: &Context) -> Body {
   if text.trim().isEmpty() { return body }
+  if context.options.skipMarkup {
+    let paragraphs = text.split("\n\n").filter(|part: Str| !part.trim().isEmpty()).map(|part: Str| "<p>" + Paths.escape(part.trim()) + "</p>")
+    return emit(body, "<div class=\"api-doc\">\n" + paragraphs.join("\n") + "\n</div>\n")
+  }
   let located = Phrase.Scope{page: page, source: unit.path, outputs: context.outputs, references: context.references, settings: context.settings}
   let rendered = Markdown.fragment(text, &located, 2)
   let found = rendered.diagnostics.map(|held: Docgen.Diagnostic| Docgen.Diagnostic{..held, line: line})
