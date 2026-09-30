@@ -17,6 +17,7 @@ The package is a Pudu library. You can drive it from the command line through a 
 | Pudu API reference | `.pudu` files | One page per module and per type, with signatures, documentation, and source links. |
 | HTTP API reference | OpenAPI 3 or Swagger 2 in YAML or JSON | Operations grouped by tag, parameters, bodies, responses, and schemas. |
 | Catalog pages | `### YamlMime:Dashboard` YAML files | Card galleries such as the [extension catalogs](../extensions/index.md). |
+| Landing pages | `### YamlMime:Landing` YAML files | A full-width banner, highlighted entry points, and topic lists, such as this site's home page. |
 | Navigation | `toc.yml`, `toc.json`, or `toc.md` | Top bar, sidebar, breadcrumbs, and previous and next links. |
 | `index.json` | Every indexable page | The search index read by the site's search box. |
 | `sitemap.xml` | Every indexable page | A crawler map, written when `sitemap` is configured. |

@@ -51,7 +51,16 @@
       },
       "description": "Documentation publishing for Pudu: articles, API reference from Pudu sources, HTTP API reference, navigation, search, and static websites.",
       "keywords": ["pudu", "documentation", "static site", "api reference", "openapi"],
-      "_appFooter": "<div class=\"footer-grid\"><div class=\"footer-brand\"><p><strong>Pudu Docgen</strong></p><p><small>Documentation publishing for Pudu. Built with pudu-lang-docgen.</small></p></div><nav class=\"footer-column\" aria-label=\"Documentation\"><p><strong>Documentation</strong></p><ul><li><a href=\"/guides/introduction.html\">Documentation</a></li><li><a href=\"/guides/quick-start.html\">Guides</a></li><li><a href=\"/api/PuduLangDocgen.html\">API reference</a></li></ul></nav><nav class=\"footer-column\" aria-label=\"Project\"><p><strong>Project</strong></p><ul><li><a href=\"https://github.com/chrismichaelps/pudu-lang-docgen\">GitHub repository</a></li><li><a href=\"https://github.com/chrismichaelps/pudu-lang-docgen/issues/new\">Report an issue</a></li><li><a href=\"https://www.pudu-lang.org/\">Pudu language site</a></li></ul></nav><nav class=\"footer-column\" aria-label=\"Policies\"><p><strong>Policies</strong></p><ul><li><a href=\"https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/SECURITY.md\">Security policy</a></li><li><a href=\"https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/CODE_OF_CONDUCT.md\">Code of conduct</a></li><li><a href=\"https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/LICENSE\">License Apache-2.0</a></li></ul></nav></div><div class=\"footer-legal\"><p><small>Built with pudu-lang-docgen.</small></p><p><small>Copyright © 2026 Chris Michael. Licensed under the Apache License 2.0.</small></p></div>"
+      "_copyright": "Chris M. Perez Santiago",
+      "_footerLinks": [
+        { "name": "Releases", "href": "https://github.com/chrismichaelps/pudu-lang-docgen/releases" },
+        { "name": "Contribute", "href": "https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/CONTRIBUTING.md" },
+        { "name": "Report an issue", "href": "https://github.com/chrismichaelps/pudu-lang-docgen/issues/new" },
+        { "name": "Security", "href": "https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/SECURITY.md" },
+        { "name": "Code of conduct", "href": "https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/CODE_OF_CONDUCT.md" },
+        { "name": "License", "href": "https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/LICENSE" },
+        { "name": "Pudu", "href": "https://www.pudu-lang.org/" }
+      ]
     },
     "sitemap": {
       "baseUrl": "https://www.pudu-lang-docgen.com",

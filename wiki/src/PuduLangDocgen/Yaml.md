@@ -30,7 +30,7 @@ export fn scalar(written: Str) -> Str
 ### Linkage
 
 - **Requires:** [[src/PuduLangDocgen]] · [[src/PuduLangDocgen/Meta]]
-- **Consumed by:** [[src/PuduLangDocgen/Api/Export]] · [[src/PuduLangDocgen/Build/Overwrite]] · [[src/PuduLangDocgen/Build/Sources]] · [[src/PuduLangDocgen/Configuration]] · [[src/PuduLangDocgen/Docset]] · [[src/PuduLangDocgen/Markdown/FrontMatter]] · [[src/PuduLangDocgen/Navigation]] · [[src/PuduLangDocgen/References]] · [[src/PuduLangDocgen/Scaffold]] · [[test/PuduLangDocgen/ApiTest]] · [[test/PuduLangDocgen/InlineTest]] · [[test/PuduLangDocgen/RestTest]]
+- **Consumed by:** [[src/PuduLangDocgen/Api/Export]] · [[src/PuduLangDocgen/Build/Overwrite]] · [[src/PuduLangDocgen/Build/Sources]] · [[src/PuduLangDocgen/Configuration]] · [[src/PuduLangDocgen/Docset]] · [[src/PuduLangDocgen/Markdown/FrontMatter]] · [[src/PuduLangDocgen/Navigation]] · [[src/PuduLangDocgen/References]] · [[src/PuduLangDocgen/Scaffold]] · [[test/PuduLangDocgen/ApiTest]] · [[test/PuduLangDocgen/InlineTest]] · [[test/PuduLangDocgen/RestTest]] · [[test/PuduLangDocgen/SiteLandingTest]]
 
 ## Algorithm
 

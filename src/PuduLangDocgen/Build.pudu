@@ -28,6 +28,7 @@ import PuduLangDocgen.Rest.OpenApi as OpenApi
 import PuduLangDocgen.Rest.Pages as RestPages
 import PuduLangDocgen.Site.Format as Format
 import PuduLangDocgen.Site.Gallery as Gallery
+import PuduLangDocgen.Site.Landing as Landing
 import PuduLangDocgen.Theme as Theme
 
 /** @Docgen.Build.Input — everything a build reads, already loaded from the project */
@@ -276,6 +277,10 @@ fn render(entry: &Sources.Entry, outputs: &Map[Str, Str], registry: &Map[Str, Do
     }
     case Sources.Catalog(value) => match Gallery.render(&value, &located) {
       case Ok(found) => ([Docgen.Page{..base, kind: "catalog", title: found.title, body: found.body, headings: found.headings, links: found.links}], found.diagnostics)
+      case Err(reason) => ([base], [Docgen.error(Codes.CONTENT_INVALID, entry.source, 1, reason)])
+    }
+    case Sources.Hub(value) => match Landing.render(&value, &located) {
+      case Ok(found) => ([Docgen.Page{..base, kind: "landing", title: found.title, body: found.body, headings: found.headings, links: found.links}], found.diagnostics)
       case Err(reason) => ([base], [Docgen.error(Codes.CONTENT_INVALID, entry.source, 1, reason)])
     }
     case Sources.ApiPage(value) => match Sheet.render(&value, &located) {

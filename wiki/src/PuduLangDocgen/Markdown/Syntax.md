@@ -72,7 +72,7 @@ export type Block
 ### Linkage
 
 - **Requires:** nothing inside the package
-- **Consumed by:** [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Inline]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Markdown/Blocks]] · [[src/PuduLangDocgen/Markdown/Crossref]] · [[src/PuduLangDocgen/Markdown/Layout]] · [[src/PuduLangDocgen/Markdown/Leaves]] · [[src/PuduLangDocgen/Markdown/Phrase]] · [[src/PuduLangDocgen/Markdown/Render]] · [[test/PuduLangDocgen/InlineTest]]
+- **Consumed by:** [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Inline]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Markdown/Blocks]] · [[src/PuduLangDocgen/Markdown/Crossref]] · [[src/PuduLangDocgen/Markdown/Layout]] · [[src/PuduLangDocgen/Markdown/Leaves]] · [[src/PuduLangDocgen/Markdown/Phrase]] · [[src/PuduLangDocgen/Markdown/Render]] · [[src/PuduLangDocgen/Site/Landing]] · [[test/PuduLangDocgen/InlineTest]]
 
 ## Algorithm
 
@@ -94,4 +94,4 @@ SHALLOW. Types only.
 
 ## Referenced by
 
-[[src/PuduLangDocgen/Markdown/_MOC]] · [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Inline]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Markdown/Blocks]] · [[src/PuduLangDocgen/Markdown/Crossref]] · [[src/PuduLangDocgen/Markdown/Layout]] · [[src/PuduLangDocgen/Markdown/Leaves]] · [[src/PuduLangDocgen/Markdown/Phrase]] · [[src/PuduLangDocgen/Markdown/Render]]
+[[src/PuduLangDocgen/Markdown/_MOC]] · [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Inline]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Markdown/Blocks]] · [[src/PuduLangDocgen/Markdown/Crossref]] · [[src/PuduLangDocgen/Markdown/Layout]] · [[src/PuduLangDocgen/Markdown/Leaves]] · [[src/PuduLangDocgen/Markdown/Phrase]] · [[src/PuduLangDocgen/Markdown/Render]] · [[src/PuduLangDocgen/Site/Landing]]

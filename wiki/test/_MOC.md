@@ -20,6 +20,7 @@ One page per suite under `test/`, listing the contracts it holds.
 - [[test/PuduLangDocgen/PathsTest]] — publication boundaries and destination escaping remain observable (21 checks).
 - [[test/PuduLangDocgen/ReferencesTest]] — identities stay unique and maps round-trip (21 checks).
 - [[test/PuduLangDocgen/RestTest]] — interface descriptions become operation and schema references (23 checks).
+- [[test/PuduLangDocgen/SiteLandingTest]] — hub pages render banners, highlights, topic lists, and site footers (24 checks).
 - [[test/PuduLangDocgen/TemplateTest]] — templates fill metadata exactly and refuse malformed tags (17 checks).
 - [[test/PuduLangDocgen/ThemeTest]] — the layout, its overrides, and site-wide files render as specified (35 checks).
 

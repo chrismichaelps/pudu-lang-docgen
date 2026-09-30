@@ -26,7 +26,7 @@ fn page(meta: Array[(Str, Docgen.Meta)]) -> Docgen.Page {
 fn frame() -> View.Frame {
   let item = Docgen.TocItem{title: "Alpha", href: "guide/a.html", uid: "", expanded: false, children: []}
   let group = Docgen.TocItem{title: "Guide", href: "", uid: "", expanded: false, children: [item]}
-  View.Frame{navbar: [Docgen.TocItem{..group, href: "guide/a.html", children: []}], toc: [group], trail: [group, item], previous: None, next: Some(Docgen.TocItem{..item, title: "Beta", href: "guide/b.html"}), editUrl: "https://git.example/edit", updated: "2026-09-01", features: ["math"], root: "", pdf: "guide/toc.pdf", tocPath: "guide/toc.json", navPath: "toc.json"}
+  View.Frame{navbar: [Docgen.TocItem{..group, href: "guide/a.html", children: []}], toc: [group], trail: [group, item], previous: None, next: Some(Docgen.TocItem{..item, title: "Beta", href: "guide/b.html"}), editUrl: "https://git.example/edit", updated: "2026-09-01", features: ["math"], root: "", pdf: "guide/toc.pdf", year: "2026", tocPath: "guide/toc.json", navPath: "toc.json"}
 }
 
 /// A page rendered through the default layout.

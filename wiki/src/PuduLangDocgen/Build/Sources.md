@@ -22,7 +22,7 @@ here: global, group, file rules, then the file's own header.
 ### Signatures
 
 ```pudu
-export type Document = Article(Markdown.Article) | Service(OpenApi.Service) | ApiPage(Docgen.Meta) | Catalog(Docgen.Meta) | Moved(Str)
+export type Document = Article(Markdown.Article) | Service(OpenApi.Service) | ApiPage(Docgen.Meta) | Catalog(Docgen.Meta) | Hub(Docgen.Meta) | Moved(Str)
 export type Entry = { source: Str, output: Str, meta: Array[(Str, Docgen.Meta)], document: Document }
 export type Read = { entries: Array[Entry], tocs: Array[(Str, Str, Navigation.Toc)], diagnostics: Array[Docgen.Diagnostic] }
 export fn mapped(mappings: &Array[Configuration.Mapping], paths: &Array[Str], skip: &Array[Str]) -> Array[(Str, Str)]
@@ -33,7 +33,7 @@ export fn read(content: &Array[(Str, Str)], files: &Map[Str, Str], global: &Arra
 
 ### Linkage
 
-- **Requires:** [[src/PuduLangDocgen/Configuration]] · [[src/PuduLangDocgen/Constants/Codes]] · [[src/PuduLangDocgen]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Meta]] · [[src/PuduLangDocgen/Navigation]] · [[src/PuduLangDocgen/Paths]] · [[src/PuduLangDocgen/Rest/OpenApi]] · [[src/PuduLangDocgen/Site/Gallery]] · [[src/PuduLangDocgen/Yaml]]
+- **Requires:** [[src/PuduLangDocgen/Configuration]] · [[src/PuduLangDocgen/Constants/Codes]] · [[src/PuduLangDocgen]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Meta]] · [[src/PuduLangDocgen/Navigation]] · [[src/PuduLangDocgen/Paths]] · [[src/PuduLangDocgen/Rest/OpenApi]] · [[src/PuduLangDocgen/Site/Gallery]] · [[src/PuduLangDocgen/Site/Landing]] · [[src/PuduLangDocgen/Yaml]]
 - **Consumed by:** [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Docset]] · [[test/PuduLangDocgen/InlineTest]]
 
 ## Algorithm

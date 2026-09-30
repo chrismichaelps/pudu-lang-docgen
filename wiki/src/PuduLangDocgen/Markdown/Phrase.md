@@ -47,7 +47,7 @@ export fn referenceHref(reference: &Docgen.Reference, context: &Scope) -> Str
 ### Linkage
 
 - **Requires:** [[src/PuduLangDocgen/Constants/Codes]] · [[src/PuduLangDocgen]] · [[src/PuduLangDocgen/Markdown/Syntax]] · [[src/PuduLangDocgen/Paths]] · [[src/PuduLangDocgen/References]]
-- **Consumed by:** [[src/PuduLangDocgen/Api/Pages]] · [[src/PuduLangDocgen/Api/Sheet]] · [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Markdown/Render]] · [[src/PuduLangDocgen/Rest/Pages]] · [[src/PuduLangDocgen/Site/Gallery]] · [[test/PuduLangDocgen/ApiTest]] · [[test/PuduLangDocgen/MarkdownTest]] · [[test/PuduLangDocgen/RestTest]] · [[test/PuduLangDocgen/ThemeTest]]
+- **Consumed by:** [[src/PuduLangDocgen/Api/Pages]] · [[src/PuduLangDocgen/Api/Sheet]] · [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Markdown/Render]] · [[src/PuduLangDocgen/Rest/Pages]] · [[src/PuduLangDocgen/Site/Gallery]] · [[src/PuduLangDocgen/Site/Landing]] · [[test/PuduLangDocgen/ApiTest]] · [[test/PuduLangDocgen/MarkdownTest]] · [[test/PuduLangDocgen/RestTest]] · [[test/PuduLangDocgen/SiteLandingTest]] · [[test/PuduLangDocgen/ThemeTest]]
 
 ## Algorithm
 
@@ -82,4 +82,4 @@ DEEP. The single place inline output and link policy meet.
 
 ## Referenced by
 
-[[src/PuduLangDocgen/Markdown/_MOC]] · [[src/PuduLangDocgen/Api/Pages]] · [[src/PuduLangDocgen/Api/Sheet]] · [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Markdown/Render]] · [[src/PuduLangDocgen/Rest/Pages]] · [[src/PuduLangDocgen/Site/Gallery]]
+[[src/PuduLangDocgen/Markdown/_MOC]] · [[src/PuduLangDocgen/Api/Pages]] · [[src/PuduLangDocgen/Api/Sheet]] · [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Markdown/Render]] · [[src/PuduLangDocgen/Rest/Pages]] · [[src/PuduLangDocgen/Site/Gallery]] · [[src/PuduLangDocgen/Site/Landing]]

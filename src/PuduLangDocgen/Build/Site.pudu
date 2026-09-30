@@ -84,7 +84,7 @@ export fn rendered(pages: &Array[Docgen.Page], context: &Context) -> Array[Docge
     let frame = View.Frame {
       navbar: navbar, toc: items, trail: if fromRoot.isEmpty() { Resolve.trail(&items, page.path) } else { fromRoot },
       previous: previous, next: next, editUrl: editUrl(&page, context), updated: Map.getOr(&context.history, page.source, ""),
-      features: features, root: if page.kind == "not-found" { basePath(&page.meta) } else { "" }, pdf: pdf, tocPath: governing,
+      features: features, root: if page.kind == "not-found" { basePath(&page.meta) } else { "" }, pdf: pdf, year: context.today.take(4), tocPath: governing,
       navPath: if root.isEmpty() { "" } else { "toc.json" }
     }
     let view = View.view(&page, &frame)

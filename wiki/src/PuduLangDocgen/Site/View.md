@@ -15,7 +15,8 @@ tags: [module, deep]
 
 Everything a layout shows for one page as template metadata: site identity, SEO and social
 tags, structured data, navigation, breadcrumbs, affix, pager, actions, footer, client features,
-and interface text, with `_disable*` switches for each part.
+and interface text, with `_disable*` switches for each part. The footer is `_appFooter` markup,
+or else `_footerLinks` and a `_copyright` line dated with the build year.
 
 ## Interface
 
@@ -33,6 +34,7 @@ export type Frame = {
   features: Array[Str],
   root: Str,
   pdf: Str,
+  year: Str,
   tocPath: Str,
   navPath: Str
 }
@@ -47,7 +49,7 @@ export fn tocHtml(items: &Array[Docgen.TocItem], page: Str, trail: &Array[Docgen
 
 ## Algorithm
 
-- `view` — The view of a page: site identity, navigation, content, and interface text. Page metadata switches parts off with `_disableToc`, `_disableAffix`, `_disableBreadcrumb`, `_disableNavbar`, `_disableFooter`, `_disableContribution`, `_disableNextArticle`, and `_enableSearch: false`.
+- `view` — The view of a page: site identity, navigation, content, and interface text. Page metadata switches parts off with `_disableToc`, `_disableAffix`, `_disableBreadcrumb`, `_disableNavbar`, `_disableFooter`, `_disableContribution`, `_disableNextArticle`, and `_enableSearch: false`. The footer shows `_appFooter` markup, or else the `_footerLinks` list and a `_copyright` line dated with the build year. Plain layouts show no page actions.
 - `tocHtml` — Nested navigation as HTML lists; items on the trail to the page start expanded.
 
 ## Negative Logic (Prohibited Paths)

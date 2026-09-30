@@ -14,10 +14,11 @@ import PuduLangDocgen.Navigation as Navigation
 import PuduLangDocgen.Paths as Paths
 import PuduLangDocgen.Rest.OpenApi as OpenApi
 import PuduLangDocgen.Site.Gallery as Gallery
+import PuduLangDocgen.Site.Landing as Landing
 import PuduLangDocgen.Yaml as Yaml
 
 /** @Docgen.Build.Document — one content file read into the form its kind needs */
-export type Document = Article(Markdown.Article) | Service(OpenApi.Service) | ApiPage(Docgen.Meta) | Catalog(Docgen.Meta) | Moved(Str)
+export type Document = Article(Markdown.Article) | Service(OpenApi.Service) | ApiPage(Docgen.Meta) | Catalog(Docgen.Meta) | Hub(Docgen.Meta) | Moved(Str)
 
 /** @Docgen.Build.Entry — a content file, where it publishes, and its merged metadata */
 export type Entry = { source: Str, output: Str, meta: Array[(Str, Docgen.Meta)], document: Document }
@@ -121,6 +122,8 @@ export fn read(content: &Array[(Str, Str)], files: &Map[Str, Str], global: &Arra
         case Ok(value) => {
           if text.split("\n")[0].contains(Gallery.MARKER) {
             entries = entries.push(Entry{source: source, output: Paths.output(output), meta: inherited, document: Catalog(value)})
+          } else if text.split("\n")[0].contains(Landing.MARKER) {
+            entries = entries.push(Entry{source: source, output: Paths.output(output), meta: Meta.merge(&Meta.merge(&[("_layout", Docgen.Text("landing"))], &inherited), &declared(&value)), document: Hub(value)})
           } else if text.trim().startsWith(API_PAGE) {
             entries = entries.push(Entry{source: source, output: Paths.output(output), meta: inherited, document: ApiPage(value)})
           } else if OpenApi.recognizes(&value) {
@@ -128,7 +131,7 @@ export fn read(content: &Array[(Str, Str)], files: &Map[Str, Str], global: &Arra
               case Ok(service) => { entries = entries.push(Entry{source: source, output: Paths.output(output), meta: inherited, document: Service(service)}) }
               case Err(reason) => { problems = problems.push(Docgen.error(Codes.CONTENT_INVALID, source, 1, reason)) }
             }
-          } else { problems = problems.push(Docgen.warning(Codes.CONTENT_UNSUPPORTED, source, 1, "structured file is not an interface description, an API page, or a catalog and is skipped")) }
+          } else { problems = problems.push(Docgen.warning(Codes.CONTENT_UNSUPPORTED, source, 1, "structured file is not an interface description, an API page, a catalog, or a landing page and is skipped")) }
         }
         case Err(reason) => { problems = problems.push(Docgen.error(Codes.CONTENT_INVALID, source, 1, reason)) }
       }
@@ -163,5 +166,13 @@ fn object(path: Str, files: &Map[Str, Str]) -> Result[Array[(Str, Docgen.Meta)],
     case Ok(Docgen.Fields(fields)) => Ok(fields)
     case Ok(_) => Err(Docgen.error(Codes.CONFIG_INVALID, path, 1, "metadata file must hold an object"))
     case Err(reason) => Err(Docgen.error(Codes.CONFIG_UNREADABLE, path, 1, reason))
+  }
+}
+
+/// The `metadata` object a structured page declares for itself.
+fn declared(value: &Docgen.Meta) -> Array[(Str, Docgen.Meta)] {
+  match value {
+    case Docgen.Fields(fields) => Meta.fieldsOf(&fields, "metadata")
+    case _ => []
   }
 }

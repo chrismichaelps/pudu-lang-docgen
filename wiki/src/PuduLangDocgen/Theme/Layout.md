@@ -40,6 +40,7 @@ export fn templates() -> Array[(Str, Str)]
 ## Edge Cases
 
 - The footer shows unless `showFooter` is false.
+- Below 1024 pixels the navbar folds behind a toggle button beside the search box.
 
 ## Depth
 

@@ -39,6 +39,9 @@ still to build. The acceptance boundary lists every behavior a row must cover.
 | PDF | per-TOC printable documents, cover page, TOC page, header and footer templates, background printing, detected or configured renderer | Site/Print, Docset/Tasks | Done |
 | Reference services | `xrefService` addresses holding `{uid}` asked for identities a trial build left unresolved | References, Docset/Tools | Done |
 | Page switches | `_disableFooter` beside the other `_disable*` switches | Site/View, Theme/Layout | Done |
+| Landing pages | `YamlMime:Landing` hub pages: full-width banner, highlighted entry points, topic lists, related content, page metadata | Site/Landing, Build | Done |
+| Site footer | `_footerLinks` and `_copyright` dated by the build year; `_appFooter` still replaces it | Site/View, Theme/Layout | Done |
+| Mobile header | site name kept on small screens; navbar behind a toggle below 1024 pixels | Theme/Layout, Theme/Style, Theme/Script | Done |
 | Release | full tests, examples, CI, wiki API docs | tools, examples | Done |
 
 ## Referenced by

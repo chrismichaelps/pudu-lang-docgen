@@ -61,7 +61,7 @@ export fn parse(file: Str, text: Str) -> Result[Config, Array[Docgen.Diagnostic]
 ### Linkage
 
 - **Requires:** [[src/PuduLangDocgen/Api/Catalog]] · [[src/PuduLangDocgen/Api/Export]] · [[src/PuduLangDocgen/Configuration/Fields]] · [[src/PuduLangDocgen/Configuration/Rules]] · [[src/PuduLangDocgen/Constants/Codes]] · [[src/PuduLangDocgen]] · [[src/PuduLangDocgen/Meta]] · [[src/PuduLangDocgen/Site/Sitemap]] · [[src/PuduLangDocgen/Yaml]]
-- **Consumed by:** [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Build/Site]] · [[src/PuduLangDocgen/Build/Sources]] · [[src/PuduLangDocgen/Docset]] · [[src/PuduLangDocgen/Docset/Tools]] · [[test/PuduLangDocgen/BuildTest]] · [[test/PuduLangDocgen/ConfigurationTest]] · [[test/PuduLangDocgen/InlineTest]]
+- **Consumed by:** [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Build/Site]] · [[src/PuduLangDocgen/Build/Sources]] · [[src/PuduLangDocgen/Docset]] · [[src/PuduLangDocgen/Docset/Tools]] · [[test/PuduLangDocgen/BuildTest]] · [[test/PuduLangDocgen/ConfigurationTest]] · [[test/PuduLangDocgen/InlineTest]] · [[test/PuduLangDocgen/SiteLandingTest]]
 
 ## Algorithm
 

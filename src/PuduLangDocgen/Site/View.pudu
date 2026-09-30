@@ -21,6 +21,7 @@ export type Frame = {
   features: Array[Str],
   root: Str,
   pdf: Str,
+  year: Str,
   tocPath: Str,
   navPath: Str
 }
@@ -34,7 +35,8 @@ const MATHJAX: Str = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"
 /// The view of a page: site identity, navigation, content, and interface text.
 /// Page metadata switches parts off with `_disableToc`, `_disableAffix`, `_disableBreadcrumb`,
 /// `_disableNavbar`, `_disableFooter`, `_disableContribution`, `_disableNextArticle`, and
-/// `_enableSearch: false`.
+/// `_enableSearch: false`. The footer shows `_appFooter` markup, or else the `_footerLinks`
+/// list and a `_copyright` line dated with the build year. Plain layouts show no page actions.
 export fn view(page: &Docgen.Page, frame: &Frame) -> Docgen.Meta {
   let meta = page.meta
   let root = if frame.root.isEmpty() { Paths.rootOf(page.path) } else { frame.root }
@@ -52,7 +54,10 @@ export fn view(page: &Docgen.Page, frame: &Frame) -> Docgen.Meta {
   let next = if hidePager { None } else { frame.next }
   let baseUrl = Meta.textOr(&meta, "_baseUrl", "")
   let canonical = if baseUrl.isEmpty() { "" } else { (if baseUrl.endsWith("/") { baseUrl } else { baseUrl + "/" }) + page.path }
-  let footer = Meta.textOr(&meta, "_appFooter", "<span>" + Paths.escape(siteName) + "</span>")
+  let footer = Meta.textOr(&meta, "_appFooter", "")
+  let footerLinks = links(&meta, "_footerLinks", root)
+  let holder = Meta.textOr(&meta, "_copyright", "")
+  let copyright = if holder.isEmpty() { "" } else { "© " + (if frame.year.isEmpty() { "" } else { frame.year + " " }) + holder }
   let pdfUrl = if frame.pdf.isEmpty() { "" } else { Paths.between(page.path, frame.pdf) }
   let fields: Array[(Str, Docgen.Meta)] = [
     ("lang", Docgen.Text(lang)), ("root", Docgen.Text(root)), ("kind", Docgen.Text(page.kind)),
@@ -83,15 +88,40 @@ export fn view(page: &Docgen.Page, frame: &Frame) -> Docgen.Meta {
     ("_navPath", Docgen.Text(frame.navPath)), ("_navRel", Docgen.Text(if frame.navPath.isEmpty() { "" } else { Paths.between(page.path, frame.navPath) })),
     ("navbar", Docgen.Items(navbar(page, frame))), ("toc", Docgen.Text(if showToc { tocHtml(&frame.toc, page.path, &frame.trail) } else { "" })),
     ("breadcrumb", Docgen.Items(breadcrumb(page, frame, siteName))),
-    ("hasActions", Docgen.Flag(!editUrl.isEmpty() || !frame.updated.isEmpty() || !pdfUrl.isEmpty())), ("editUrl", Docgen.Text(editUrl)), ("lastModified", Docgen.Text(frame.updated)),
+    ("hasActions", Docgen.Flag(!plain && (!editUrl.isEmpty() || !frame.updated.isEmpty() || !pdfUrl.isEmpty()))), ("editUrl", Docgen.Text(editUrl)), ("lastModified", Docgen.Text(frame.updated)),
     ("hasPager", Docgen.Flag(Option.isSome(&previous) || Option.isSome(&next))), ("previous", neighbor(&previous, page.path)), ("next", neighbor(&next, page.path)),
     ("headings", Docgen.Items(page.headings.filter(|found: Docgen.Heading| found.level == 2 || found.level == 3).map(|found: Docgen.Heading| Docgen.Fields([("id", Docgen.Text(found.id)), ("title", Docgen.Text(found.title)), ("level", Docgen.Whole(found.level))])))),
     ("body", Docgen.Text(page.body)), ("footer", Docgen.Text(Sanitize.clean(footer))),
+    ("hasFooterLinks", Docgen.Flag(!footerLinks.isEmpty())), ("footerLinks", Docgen.Items(footerLinks)), ("copyright", Docgen.Text(copyright)),
     ("math", Docgen.Flag(frame.features.contains("math"))), ("mathScript", Docgen.Text(Meta.textOr(&meta, "_mathScript", MATHJAX))),
     ("mermaid", Docgen.Flag(frame.features.contains("mermaid"))), ("mermaidScript", Docgen.Text(Meta.textOr(&meta, "_mermaidScript", MERMAID))),
     ("text", Strings.forLanguage(lang, &Meta.fieldsOf(&meta, "_text")))
   ]
   Docgen.Fields(fields)
+}
+
+/// Links listed under a key as objects with `name` and `href`; unsafe or incomplete entries are
+/// left out and local destinations are made relative to the page.
+fn links(meta: &Array[(Str, Docgen.Meta)], key: Str, root: Str) -> Array[Docgen.Meta] {
+  var result: Array[Docgen.Meta] = []
+  match Meta.get(meta, key) {
+    case Some(Docgen.Items(entries)) => {
+      for entry in entries {
+        match entry {
+          case Docgen.Fields(fields) => {
+            let name = Meta.textOr(&fields, "name", "")
+            let href = Meta.textOr(&fields, "href", "")
+            if !name.isEmpty() && !href.isEmpty() && Paths.href(href) {
+              result = result.push(Docgen.Fields([("name", Docgen.Text(name)), ("href", Docgen.Text(if Paths.remote(href) { href } else { root + href }))]))
+            }
+          }
+          case _ => {}
+        }
+      }
+    }
+    case _ => {}
+  }
+  result
 }
 
 /// A list of keywords written as text or as a list, joined by commas.
