@@ -65,7 +65,7 @@ This site's identity is set entirely through `globalMetadata`:
   "_appName": "Pudu Docgen",
   "_appLogoPath": "images/pudu-lang-short.png",
   "_appFaviconPath": "images/pudu-lang-short.png",
-  "_baseUrl": "https://pudu-lang-docgen.vercel.app",
+  "_baseUrl": "https://www.pudu-lang-docgen.com",
   "_enableSearch": true,
   "_lang": "en"
 }

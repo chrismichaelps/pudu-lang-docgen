@@ -21,7 +21,7 @@ Add a `sitemap` section to publish `sitemap.xml`:
 
 ```json
 "sitemap": {
-  "baseUrl": "https://pudu-lang-docgen.vercel.app",
+  "baseUrl": "https://www.pudu-lang-docgen.com",
   "changefreq": "weekly",
   "priority": "0.5",
   "fileOptions": {
