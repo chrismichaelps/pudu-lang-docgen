@@ -6,49 +6,65 @@ description: Turn Markdown articles, Pudu source declarations, and OpenAPI descr
 
 # Documentation publishing for Pudu
 
-<p class="hero-eyebrow">pudu-lang-docgen 0.1 · Microsoft Learn style, generated from your sources</p>
-
-<p class="hero-lead">Turn Markdown articles, the public declarations of your Pudu modules, and OpenAPI descriptions into one static website with navigation, cross references, search, and printable PDF documents. This site is built with it.</p>
+<p class="hero-lead">pudu-lang-docgen turns Markdown articles, the public declarations of your Pudu modules, and OpenAPI descriptions into one static website with navigation, cross references, search, and printable PDF documents. This site is built with it.</p>
 
 <p class="hero-actions"><a class="button button-primary" href="guides/quick-start.html">Get started</a> <a class="button" href="api/PuduLangDocgen.html">API reference</a> <a class="button" href="https://github.com/chrismichaelps/pudu-lang-docgen">View on GitHub</a></p>
 
-## One pipeline, three moves
+## Capabilities
 
-<div class="steps">
-<div class="step">
-<p class="step-num">1</p>
-<h3>Author</h3>
-<p>Write Markdown articles next to your Pudu modules and OpenAPI descriptions. Document declarations with doc comments where they live.</p>
-</div>
-<div class="step">
-<p class="step-num">2</p>
-<h3>Build</h3>
-<p>Run one command. Articles, API pages, navigation, search index, sitemap, and PDFs come out as a static folder.</p>
-</div>
-<div class="step">
-<p class="step-num">3</p>
-<h3>Publish</h3>
-<p>Upload the folder anywhere. No server, no database, no runtime. This site deploys straight to a static host.</p>
-</div>
-</div>
+:::row:::
+:::column:::
+### Articles
 
-## Write documents that read like products
+CommonMark with tables, alerts, tabs, includes, code excerpts, math, diagrams, and footnotes.
+[Markdown authoring](guides/markdown.md)
+:::column-end:::
+:::column:::
+### API reference from Pudu sources
 
-Articles are CommonMark with tables, alerts, tabs, includes, code excerpts, math, diagrams, and footnotes. Reuse shared snippets across pages, and export any table of contents to a printable PDF with cover, contents page, header, and footer.
+Modules, records, unions, traits, functions, and constants documented from their doc comments.
+[Pudu API reference](guides/api-reference.md)
+:::column-end:::
+:::column:::
+### HTTP API reference
 
-<p class="band-links"><a href="guides/markdown.html">Markdown authoring</a> <a href="guides/pdf.html">PDF output</a></p>
+OpenAPI 3 and Swagger 2 descriptions rendered as operation and schema pages.
+[HTTP API reference](guides/http-api.md)
+:::column-end:::
+:::column:::
+### Cross references
 
-## Reference generated from real code
+Link any page or declaration by its uid and exchange maps with other sites.
+[Links and cross references](guides/cross-references.md)
+:::column-end:::
+:::row-end:::
 
-Modules, records, unions, traits, functions, and constants become API pages built from their doc comments, with filtering and source links. OpenAPI 3 and Swagger 2 descriptions render as operation and schema pages. Link any page or declaration by its uid, and exchange cross-reference maps with other sites.
+:::row:::
+:::column:::
+### Navigation
 
-<p class="band-links"><a href="guides/api-reference.html">Pudu API reference</a> <a href="guides/http-api.html">HTTP API reference</a> <a href="guides/cross-references.html">Links and cross references</a></p>
+Tables of contents in YAML, JSON, or Markdown drive the top bar, sidebar, breadcrumbs, and pager.
+[Tables of contents](guides/tables-of-contents.md)
+:::column-end:::
+:::column:::
+### Search
 
-## Find everything, theme anything
+A generated index and client-side search with keyboard navigation. No server required.
+[Search and SEO](guides/search-and-seo.md)
+:::column-end:::
+:::column:::
+### Theming
 
-Tables of contents in YAML, JSON, or Markdown drive the top bar, sidebar, breadcrumbs, and pager. The generated index powers client-side search with keyboard navigation and no server. Override the layout or any partial, add styles and scripts, and set colors and text through metadata.
+Override the layout or any partial, add styles and scripts, and set colors and text through metadata.
+[Templates and theming](guides/templates.md)
+:::column-end:::
+:::column:::
+### PDF
 
-<p class="band-links"><a href="guides/tables-of-contents.html">Tables of contents</a> <a href="guides/search-and-seo.html">Search and SEO</a> <a href="guides/templates.html">Templates and theming</a></p>
+Printable documents per table of contents, with cover, contents page, header, and footer.
+[PDF output](guides/pdf.md)
+:::column-end:::
+:::row-end:::
 
 ## Quick start
 
