@@ -30,7 +30,7 @@
     ],
     "resource": [
       {
-        "files": ["images/**"]
+        "files": ["images/**", "favicon.ico"]
       }
     ],
     "output": "_site",
@@ -39,8 +39,8 @@
       "_appTitle": "Pudu Docgen",
       "_appName": "Pudu Docgen",
       "_appLogoPath": "images/pudu-lang-short.png",
-      "_appFaviconPath": "images/pudu-lang-short.png",
-      "_appTouchIconPath": "images/pudu-lang-short.png",
+      "_appFaviconPath": "favicon.ico",
+      "_appTouchIconPath": "images/apple-touch-icon.png",
       "_appOgImagePath": "images/pudu-lang-short.png",
       "_baseUrl": "https://www.pudu-lang-docgen.com",
       "_enableSearch": true,
