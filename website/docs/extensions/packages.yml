@@ -1,82 +1,40 @@
 ### YamlMime:Dashboard
 title: Packages
 description: |
-  pudu-lang-docgen is distributed as one Pudu package. Its modules are grouped below by the job
-  they do, so you can find the entry point you need before opening the full
-  <xref:PuduLangDocgen?text=API+reference>.
+  Pudu packages for documentation sites. pudu-lang-docgen builds the site; the other two are the
+  packages it is built on, and each can be used on its own.
+defaults:
+  author: Chris Michael
+  license: Apache-2.0
+  type: Package
 items:
 - name: pudu-lang-docgen
   description: |
-    Documentation publishing for Pudu: articles, API reference, HTTP API reference, navigation,
-    search, and static websites. Every module lives under `PuduLangDocgen`.
-  type: Package
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../guides/introduction.html
+    Documentation publishing for Pudu: articles, API reference from Pudu sources and OpenAPI
+    descriptions, navigation, cross references, search, and static websites. Its modules live
+    under `PuduLangDocgen`; start with the <xref:PuduLangDocgen?text=API+reference>.
+  homepage: ../guides/introduction.md
   repository:
     url: https://github.com/chrismichaelps/pudu-lang-docgen
   usage:
     install: pudu install @chrismichaelps/pudu-lang-docgen
-    config: '"@chrismichaelps/pudu-lang-docgen" = "0.1.0"'
-- name: PuduLangDocgen.Command
-  description: |
-    The command line as a function. `Command.run` takes the process arguments and answers an
-    exit status, so a two-line program gives a project the full `docgen` command.
-  type: Module
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../api/PuduLangDocgen.Command.html
-  repository:
-    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Command.pudu
-  usage:
     init: import PuduLangDocgen.Command as Command
-    command: Command.run(&Env.all())
-- name: PuduLangDocgen.Docset
+- name: pudu-lang-log
   description: |
-    Projects on disk: load a configuration, build and publish incrementally, write API metadata,
-    and print PDFs.
-  type: Module
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../api/PuduLangDocgen.Docset.html
+    Structured event logging with message templates, levels, enrichers, filters, and sinks. The
+    docgen command line reports its diagnostics through it, so `--logLevel` and `--log` apply to
+    every message.
+  homepage: https://github.com/chrismichaelps/pudu-lang-log
   repository:
-    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Docset.pudu
+    url: https://github.com/chrismichaelps/pudu-lang-log
   usage:
-    init: import PuduLangDocgen.Docset as Docset
-    command: Docset.build("docs/docgen.json", &Docset.options(), &Build.extensions())
-- name: PuduLangDocgen.Build
+    install: pudu install @chrismichaelps/pudu-lang-log
+- name: pudu-lang-validator
   description: |
-    The validated site plan as a pure function of loaded input, with page transforms and output
-    post-processors through `Build.Extensions`.
-  type: Module
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../api/PuduLangDocgen.Build.html
+    Typed validation rules that report every failure with its property path. docgen checks the
+    relations inside `docgen.json` with it.
+  homepage: https://github.com/chrismichaelps/pudu-lang-validator
   repository:
-    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Build.pudu
+    url: https://github.com/chrismichaelps/pudu-lang-validator
   usage:
-    init: import PuduLangDocgen.Build as Build
-    command: Build.plan(&loaded.input, &Build.extensions())
-- name: PuduLangDocgen.Configuration
-  description: |
-    The typed `docgen.json` model. `Configuration.parse` reads JSON or YAML and reports the exact
-    location of every invalid value.
-  type: Module
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../api/PuduLangDocgen.Configuration.html
-  repository:
-    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Configuration.pudu
-  usage:
-    init: import PuduLangDocgen.Configuration as Configuration
-    command: Configuration.parse("docgen.json", text)
+    install: pudu install @chrismichaelps/pudu-lang-validator
