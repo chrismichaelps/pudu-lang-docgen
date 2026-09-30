@@ -1,0 +1,149 @@
+/** @Docgen.Meta.Module — metadata values from configuration, files, and front matter */
+module PuduLangDocgen.Meta
+
+import Std.Glob as Glob
+import Std.Json as Json
+import Std.Yaml as Yaml
+import PuduLangDocgen as Docgen
+
+/** @Docgen.Meta.Rule — one metadata key assigned to every path a glob matches */
+export type Rule = { pattern: Str, key: Str, value: Docgen.Meta }
+
+/// A JSON value as metadata; fractional numbers keep their written text.
+export fn fromJson(value: &Json.Json) -> Docgen.Meta {
+  match value {
+    case Json.Null => Docgen.Nothing
+    case Json.Boolean(held) => Docgen.Flag(held)
+    case Json.Number(count) => Docgen.Whole(count)
+    case Json.Fractional(written) => Docgen.Text(written)
+    case Json.Text(written) => Docgen.Text(written)
+    case Json.List(members) => Docgen.Items(members.map(|member: Json.Json| fromJson(&member)))
+    case Json.Object(entries) => Docgen.Fields(entries.map(fn(entry: (Str, Json.Json)) -> (Str, Docgen.Meta) {
+          let (key, held) = entry
+          (key, fromJson(&held))
+        }))
+  }
+}
+
+/// A YAML value as metadata; fractional numbers keep their written text.
+export fn fromYaml(value: &Yaml.Yaml) -> Docgen.Meta {
+  match value {
+    case Yaml.Empty => Docgen.Nothing
+    case Yaml.Boolean(held) => Docgen.Flag(held)
+    case Yaml.Whole(count) => Docgen.Whole(count)
+    case Yaml.Fractional(written) => Docgen.Text(written)
+    case Yaml.Text(written) => Docgen.Text(written)
+    case Yaml.List(members) => Docgen.Items(members.map(|member: Yaml.Yaml| fromYaml(&member)))
+    case Yaml.Mapping(entries) => Docgen.Fields(entries.map(fn(entry: (Str, Yaml.Yaml)) -> (Str, Docgen.Meta) {
+          let (key, held) = entry
+          (key, fromYaml(&held))
+        }))
+  }
+}
+
+/// Metadata as JSON, preserving key order.
+export fn toJson(value: &Docgen.Meta) -> Json.Json {
+  match value {
+    case Docgen.Nothing => Json.Null
+    case Docgen.Flag(held) => Json.Boolean(held)
+    case Docgen.Whole(count) => Json.Number(count)
+    case Docgen.Text(written) => Json.Text(written)
+    case Docgen.Items(members) => Json.List(members.map(|member: Docgen.Meta| toJson(&member)))
+    case Docgen.Fields(entries) => Json.Object(entries.map(fn(entry: (Str, Docgen.Meta)) -> (Str, Json.Json) {
+          let (key, held) = entry
+          (key, toJson(&held))
+        }))
+  }
+}
+
+/// The value stored under a key, if any.
+export fn get(fields: &Array[(Str, Docgen.Meta)], key: Str) -> Option[Docgen.Meta] {
+  for (name, held) in *fields {
+    if name == key { return Some(held) }
+  }
+  None
+}
+
+/// The text stored under a key; numbers and flags answer their written form.
+export fn text(fields: &Array[(Str, Docgen.Meta)], key: Str) -> Option[Str] {
+  match get(fields, key) {
+    case Some(Docgen.Text(written)) => Some(written)
+    case Some(Docgen.Whole(count)) => Some(show(count))
+    case Some(Docgen.Flag(held)) => Some(if held { "true" } else { "false" })
+    case _ => None
+  }
+}
+
+/// The text under a key, or the fallback when it is missing or not scalar.
+export fn textOr(fields: &Array[(Str, Docgen.Meta)], key: Str, fallback: Str) -> Str {
+  match text(fields, key) {
+    case Some(written) => written
+    case None => fallback
+  }
+}
+
+/// Whether a key holds `true`, or the text `true`.
+export fn flag(fields: &Array[(Str, Docgen.Meta)], key: Str) -> Bool {
+  match get(fields, key) {
+    case Some(Docgen.Flag(held)) => held
+    case Some(Docgen.Text(written)) => written == "true"
+    case _ => false
+  }
+}
+
+/// The fields of a nested object under a key; other values answer no fields.
+export fn fieldsOf(fields: &Array[(Str, Docgen.Meta)], key: Str) -> Array[(Str, Docgen.Meta)] {
+  match get(fields, key) {
+    case Some(Docgen.Fields(entries)) => entries
+    case _ => []
+  }
+}
+
+/// The fields with a key set to a value, replacing an earlier value in place.
+export fn put(fields: &Array[(Str, Docgen.Meta)], key: Str, value: Docgen.Meta) -> Array[(Str, Docgen.Meta)] {
+  var result: Array[(Str, Docgen.Meta)] = []
+  var replaced = false
+  for (name, held) in *fields {
+    if name == key {
+      result = result.push((key, value))
+      replaced = true
+    } else { result = result.push((name, held)) }
+  }
+  if replaced { result } else { result.push((key, value)) }
+}
+
+/// Later fields override earlier ones; nested objects merge key by key.
+export fn merge(base: &Array[(Str, Docgen.Meta)], over: &Array[(Str, Docgen.Meta)]) -> Array[(Str, Docgen.Meta)] {
+  var result = *base
+  for (key, held) in *over {
+    let combined = match (get(&result, key), held) {
+      case (Some(Docgen.Fields(left)), Docgen.Fields(right)) => Docgen.Fields(merge(&left, &right))
+      case (_, other) => other
+    }
+    result = put(&result, key, combined)
+  }
+  result
+}
+
+/// Rules from a `fileMetadata` object: each key maps glob patterns to values.
+export fn rulesOf(fields: &Array[(Str, Docgen.Meta)]) -> Result[Array[Rule], Str] {
+  var rules: Array[Rule] = []
+  for (key, held) in *fields {
+    match held {
+      case Docgen.Fields(patterns) => {
+        for (pattern, value) in patterns { rules = rules.push(Rule{pattern: pattern, key: key, value: value}) }
+      }
+      case _ => { return Err("file metadata " + key + " must map glob patterns to values") }
+    }
+  }
+  Ok(rules)
+}
+
+/// The metadata every matching rule assigns to a path; later rules win.
+export fn forPath(rules: &Array[Rule], path: Str) -> Array[(Str, Docgen.Meta)] {
+  var result: Array[(Str, Docgen.Meta)] = []
+  for rule in *rules {
+    if Glob.matches(rule.pattern, path) { result = merge(&result, &[(rule.key, rule.value)]) }
+  }
+  result
+}

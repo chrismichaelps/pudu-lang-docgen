@@ -1,0 +1,27 @@
+/** @Docgen.Languages.Tests — language and emoji tables answer published identities */
+module PuduLangDocgen.LanguagesTest
+
+import Std.Io as Io
+import Std.Test as Test
+import PuduLangDocgen.Markdown.Emoji as Emoji
+import PuduLangDocgen.Markdown.Highlight as Highlight
+import PuduLangDocgen.Markdown.Languages as Languages
+
+/// Runs every language identity, file mapping, title, highlighting, and emoji contract.
+fn main() -> Int {
+  let checks = Test.suite("Languages", &[
+      Test.equals("aliases identify languages", &["js", "JavaScript", "py", "sh", "C++", "pudu", "unknown-lang"].map(|name: Str| Languages.identify(name)), &["javascript", "javascript", "python", "shell", "c++", "pudu", "unknown-lang"]),
+      Test.equals("extensions identify files", &["src/a.pudu", "a.RS", "b.tsx", "c.yml", "no-extension", "x.unknownext"].map(|path: Str| Languages.ofPath(path)), &["pudu", "rust", "tsx", "yaml", "", ""]),
+      Test.equals("exact file names win", &[Languages.ofPath("deploy/Dockerfile"), Languages.ofPath("Makefile")], &["dockerfile", "makefile"]),
+      Test.equals("display names", &[Languages.title("javascript"), Languages.title("pudu"), Languages.title("c++"), Languages.title("none")], &["JavaScript", "Pudu", "C++", "none"]),
+      Test.equals("shared profiles highlight", &Highlight.lines("tsx", "const a"), &["<span class=\"hl-k\">const</span> a"]),
+      Test.equals("unknown language escapes only", &Highlight.lines("brainfreeze", "<a>\nb"), &["&lt;a&gt;", "b"]),
+      Test.equals("block comment spans lines", &Highlight.lines("c", "/* a\nb */ x"), &["<span class=\"hl-c\">/* a</span>", "<span class=\"hl-c\">b */</span> x"]),
+      Test.equals("hash comment needs a word boundary", &Highlight.lines("shell", "echo a#b # c"), &["<span class=\"hl-k\">echo</span> a#b <span class=\"hl-c\"># c</span>"]),
+      Test.equals("strings and literals", &Highlight.lines("json", "\{\"a\": true\}"), &["\{<span class=\"hl-s\">&quot;a&quot;</span>: <span class=\"hl-l\">true</span>\}"]),
+      Test.equals("emoji names and aliases", &[Emoji.lookup("grinning_face"), Emoji.lookup("smile"), Emoji.lookup("flag_united_states"), Emoji.lookup("nope")], &[Some("😀"), Some("😄"), Some("🇺🇸"), None])
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

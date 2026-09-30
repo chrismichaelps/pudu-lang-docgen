@@ -1,0 +1,268 @@
+/** @Docgen.Markdown.Render — article blocks rendered as accessible HTML */
+module PuduLangDocgen.Markdown.Render
+
+import Std.Bytes as Bytes
+import Std.Map as Map
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Inline as Inline
+import PuduLangDocgen.Markdown.Highlight as Highlight
+import PuduLangDocgen.Markdown.Languages as Languages
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Markdown.Sanitize as Sanitize
+import PuduLangDocgen.Markdown.Syntax as Syntax
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Markdown.Rendered — page HTML with its outline, links, and needs */
+export type Rendered = {
+  html: Str,
+  title: Str,
+  summary: Str,
+  headings: Array[Docgen.Heading],
+  links: Array[Docgen.Link],
+  features: Array[Str],
+  diagnostics: Array[Docgen.Diagnostic]
+}
+
+/// Longest summary taken from the first paragraph.
+const SUMMARY_LIMIT: Int = 200
+
+/// Blocks rendered for a page; the title is the first level-one heading.
+export fn render(blocks: &Array[Syntax.Block], context: &Phrase.Scope) -> Rendered {
+  var notes: Array[(Str, Array[Syntax.Block])] = []
+  var body: Array[Syntax.Block] = []
+  for item in *blocks {
+    match item {
+      case Syntax.Footnote(label, content) => { notes = notes.push((label, content)) }
+      case other => { body = body.push(other) }
+    }
+  }
+  let out = footnotes(sequence(Phrase.start(), &body, context, context.source, false), &notes, context)
+  var title = ""
+  for found in out.headings {
+    if title.isEmpty() && found.level == 1 { title = found.title }
+  }
+  Rendered{html: out.pieces.join(""), title: title, summary: summaryOf(blocks), headings: out.headings, links: out.links, features: out.features, diagnostics: out.diagnostics}
+}
+
+/// The notes a page referenced, in reference order, each linking back to its first reference.
+fn footnotes(out: Phrase.Out, notes: &Array[(Str, Array[Syntax.Block])], context: &Phrase.Scope) -> Phrase.Out {
+  if out.notes.isEmpty() { return out }
+  var held = Phrase.emit(out, "<section class=\"footnotes\" role=\"doc-endnotes\">\n<hr>\n<ol>\n")
+  var index = 0
+  while index < held.notes.length() {
+    let label = held.notes[index]
+    let id = Paths.slug(label)
+    var content: Array[Syntax.Block] = []
+    for (name, blocks) in *notes {
+      if name == label { content = blocks }
+    }
+    held = sequence(Phrase.emit(held, "<li id=\"fn-" + id + "\">\n"), &content, context, context.source, false)
+    held = Phrase.emit(held, "<a href=\"#fnref-" + id + "\" class=\"footnote-back\" aria-label=\"Back to reference\">↩</a></li>\n")
+    index = index + 1
+  }
+  Phrase.emit(held, "</ol>\n</section>\n")
+}
+
+/// Plain text of the first paragraph, cut at a word near the summary limit.
+export fn summaryOf(blocks: &Array[Syntax.Block]) -> Str {
+  for held in *blocks {
+    match held {
+      case Syntax.Paragraph(children) => {
+        let text = Inline.plain(&children).replace("\n", " ").trim()
+        if text.length() <= SUMMARY_LIMIT { return text }
+        let cut = text.take(SUMMARY_LIMIT)
+        let space = cut.split(" ")
+        return space.slice(0, if space.length() > 1 { space.length() - 1 } else { 1 }).join(" ") + "…"
+      }
+      case Syntax.Included(_path, children) => {
+        let found = summaryOf(&children)
+        if !found.isEmpty() { return found }
+      }
+      case _ => {}
+    }
+  }
+  ""
+}
+
+/// Blocks in order; `tight` renders paragraphs without wrapping elements.
+fn sequence(out: Phrase.Out, blocks: &Array[Syntax.Block], context: &Phrase.Scope, origin: Str, tight: Bool) -> Phrase.Out {
+  var held = out
+  for item in *blocks { held = block(held, &item, context, origin, tight) }
+  held
+}
+
+/// One block as HTML.
+fn block(out: Phrase.Out, item: &Syntax.Block, context: &Phrase.Scope, origin: Str, tight: Bool) -> Phrase.Out {
+  match item {
+    case Syntax.Heading(title) => heading(out, &title, context, origin)
+    case Syntax.Paragraph(children) => {
+      if tight { Phrase.inlines(out, &children, context, origin) } else { Phrase.emit(Phrase.inlines(Phrase.emit(out, "<p>"), &children, context, origin), "</p>\n") }
+    }
+    case Syntax.CodeBlock(sample) => code(out, &sample, context)
+    case Syntax.Quote(children) => Phrase.emit(sequence(Phrase.emit(out, "<blockquote>\n"), &children, context, origin, false), "</blockquote>\n")
+    case Syntax.ListBlock(listing) => list(out, &listing, context, origin)
+    case Syntax.TableBlock(held) => table(out, &held, context, origin)
+    case Syntax.Rule => Phrase.emit(out, "<hr>\n")
+    case Syntax.HtmlBlock(raw) => Phrase.emit(out, Sanitize.clean(raw) + "\n")
+    case Syntax.Alert(notice) => alert(out, &notice, context, origin)
+    case Syntax.TabGroup(group) => tabs(out, &group, context, origin)
+    case Syntax.Included(located, children) => sequence(out, &children, context, located, tight)
+    case Syntax.Video(address) => video(out, address, origin)
+    case Syntax.MathBlock(written) => Phrase.emit(Phrase.need(out, "math"), "<div class=\"math display\">\\[" + Paths.escape(written) + "\\]</div>\n")
+    case Syntax.Grid(columns) => grid(out, &columns, context, origin)
+    case Syntax.Image(figure) => image(out, &figure, context, origin)
+    case Syntax.Footnote(_label, _content) => out
+  }
+}
+
+/// A heading with a unique fragment and a permalink.
+fn heading(out: Phrase.Out, title: &Syntax.Title, context: &Phrase.Scope, origin: Str) -> Phrase.Out {
+  let text = Inline.plain(&title.content).trim()
+  let base = if title.id.isEmpty() { Paths.slug(text) } else { title.id }
+  var id = base
+  var count = 1
+  while out.ids.contains(id) {
+    count = count + 1
+    id = base + "-" + show(count)
+  }
+  let tag = "h" + show(title.level)
+  let recorded = Phrase.Out{..out, ids: out.ids.push(id), headings: out.headings.push(Docgen.Heading{id: id, title: text, level: title.level})}
+  let opened = Phrase.emit(recorded, "<" + tag + " id=\"" + Paths.escape(id) + "\">")
+  let filled = Phrase.inlines(opened, &title.content, context, origin)
+  let link = if title.level == 1 { "" } else { "<a class=\"anchor\" href=\"#" + Paths.escape(id) + "\" aria-label=\"Link to this section\"></a>" }
+  Phrase.emit(filled, link + "</" + tag + ">\n")
+}
+
+/// A code sample with a caption bar, copy control, and emphasized lines.
+fn code(out: Phrase.Out, sample: &Syntax.Sample, context: &Phrase.Scope) -> Phrase.Out {
+  let language = sample.language.toLower()
+  if language == "plantuml" || language == "puml" {
+    let address = Map.getOr(&context.settings.diagrams, sample.text, context.settings.plantUml + "/~h" + Bytes.encodeHex(&Bytes.fromText(sample.text)))
+    return Phrase.emit(out, "<p class=\"diagram\"><img class=\"plantuml\" src=\"" + Paths.escape(address) + "\" alt=\"" + Paths.escape(if sample.title.isEmpty() { "Diagram" } else { sample.title }) + "\" loading=\"lazy\"></p>\n")
+  }
+  if language == "mermaid" {
+    return Phrase.emit(Phrase.need(out, "mermaid"), "<pre class=\"mermaid\">" + Paths.escape(sample.text) + "</pre>\n")
+  }
+  var lines: Array[Str] = []
+  var number = 1
+  for line in Highlight.lines(language, sample.text) {
+    lines = lines.push(if sample.highlight.contains(number) { "<span class=\"line highlight\">" + line + "</span>" } else { line })
+    number = number + 1
+  }
+  let label = if sample.title.isEmpty() { Paths.escape(if language.isEmpty() { "Code" } else { Languages.title(Languages.identify(language)) }) } else { Paths.escape(sample.title) }
+  let attribute = if language.isEmpty() { "" } else { " class=\"lang-" + Paths.escape(language) + "\"" }
+  Phrase.emit(out, "<div class=\"code-block\"><div class=\"code-header\"><span class=\"code-label\">" + label + "</span><button type=\"button\" class=\"copy\" aria-label=\"Copy code\">Copy</button></div><pre tabindex=\"0\"><code" + attribute + ">" + lines.join("\n") + "</code></pre></div>\n")
+}
+
+/// A bullet, numbered, or task list.
+fn list(out: Phrase.Out, listing: &Syntax.Listing, context: &Phrase.Scope, origin: Str) -> Phrase.Out {
+  let tag = if listing.ordered { "ol" } else { "ul" }
+  let start = if listing.ordered && listing.start != 1 { " start=\"" + show(listing.start) + "\"" } else { "" }
+  let tasks = listing.items.filter(|entry: Syntax.Item| entry.checked >= 0).length() > 0
+  var held = Phrase.emit(out, "<" + tag + start + (if tasks { " class=\"tasks\"" } else { "" }) + ">\n")
+  for entry in listing.items {
+    let box = if entry.checked == 1 { "<input type=\"checkbox\" disabled checked> " } else if entry.checked == 0 { "<input type=\"checkbox\" disabled> " } else { "" }
+    held = Phrase.emit(sequence(Phrase.emit(held, "<li>" + box), &entry.blocks, context, origin, listing.tight), "</li>\n")
+  }
+  Phrase.emit(held, "</" + tag + ">\n")
+}
+
+/// A table inside a scrollable region with per-column alignment.
+fn table(out: Phrase.Out, held: &Syntax.Table, context: &Phrase.Scope, origin: Str) -> Phrase.Out {
+  var result = Phrase.emit(out, "<div class=\"table-wrapper\"><table>\n<thead><tr>")
+  var column = 0
+  for cell in held.header {
+    result = Phrase.emit(Phrase.inlines(Phrase.emit(result, "<th" + aligned(&held.align, column) + ">"), &cell, context, origin), "</th>")
+    column = column + 1
+  }
+  result = Phrase.emit(result, "</tr></thead>\n<tbody>\n")
+  for row in held.rows {
+    result = Phrase.emit(result, "<tr>")
+    column = 0
+    for cell in row {
+      result = Phrase.emit(Phrase.inlines(Phrase.emit(result, "<td" + aligned(&held.align, column) + ">"), &cell, context, origin), "</td>")
+      column = column + 1
+    }
+    result = Phrase.emit(result, "</tr>\n")
+  }
+  Phrase.emit(result, "</tbody></table></div>\n")
+}
+
+/// The alignment class of a column.
+fn aligned(align: &Array[Str], column: Int) -> Str {
+  if column < align.length() && !align[column].isEmpty() { " class=\"align-" + align[column] + "\"" } else { "" }
+}
+
+/// An alert box titled by its kind.
+fn alert(out: Phrase.Out, notice: &Syntax.Notice, context: &Phrase.Scope, origin: Str) -> Phrase.Out {
+  let lowered = notice.kind.toLower()
+  let title = Map.getOr(&context.settings.alertTitles, lowered, notice.kind.take(1) + lowered.drop(1))
+  let classes = Map.getOr(&context.settings.alertClasses, notice.kind, "alert alert-" + lowered)
+  let opened = Phrase.emit(out, "<div class=\"" + Paths.escape(classes) + "\" role=\"note\"><p class=\"alert-title\">" + Paths.escape(title) + "</p>\n")
+  Phrase.emit(sequence(opened, &notice.blocks, context, origin, false), "</div>\n")
+}
+
+/// A tab group with one button per tab id; tabs with the same id across groups switch
+/// together, and a tab with a condition shows only while its condition's id is selected.
+fn tabs(out: Phrase.Out, group: &Array[Syntax.Tab], context: &Phrase.Scope, origin: Str) -> Phrase.Out {
+  let number = out.groups + 1
+  var held = Phrase.need(Phrase.Out{..out, groups: number}, "tabs")
+  held = Phrase.emit(held, "<div class=\"tabs\"><div class=\"tab-list\" role=\"tablist\">")
+  var ids: Array[Str] = []
+  for tab in *group {
+    if ids.contains(tab.id) { continue }
+    let key = "tab-" + show(number) + "-" + show(ids.length())
+    held = Phrase.emit(held, "<button type=\"button\" role=\"tab\" id=\"" + key + "\" aria-selected=\"" + (if ids.isEmpty() { "true" } else { "false" }) + "\" data-tab=\"" + Paths.escape(tab.id) + "\">" + Paths.escape(tab.title) + "</button>")
+    ids = ids.push(tab.id)
+  }
+  held = Phrase.emit(held, "</div>\n")
+  var first: Array[Str] = []
+  for tab in *group {
+    let position = ids.indexOf(tab.id)
+    let key = "tab-" + show(number) + "-" + show(position)
+    let shown = position == 0 && !first.contains(tab.id)
+    if shown { first = first.push(tab.id) }
+    let condition = if tab.condition.isEmpty() { "" } else { " data-condition=\"" + Paths.escape(tab.condition) + "\"" }
+    held = Phrase.emit(held, "<section class=\"tab-panel\" role=\"tabpanel\" aria-labelledby=\"" + key + "\" data-tab=\"" + Paths.escape(tab.id) + "\"" + condition + (if shown { "" } else { " hidden" }) + ">\n")
+    held = Phrase.emit(sequence(held, &tab.blocks, context, origin, false), "</section>\n")
+  }
+  Phrase.emit(held, "</div>\n")
+}
+
+/// An embedded HTTPS video.
+fn video(out: Phrase.Out, address: Str, origin: Str) -> Phrase.Out {
+  if !Paths.href(address) || !address.toLower().startsWith("https://") {
+    return Phrase.report(out, Docgen.warning(Codes.VIDEO_INSECURE, origin, 1, "video address must use HTTPS: " + address))
+  }
+  Phrase.emit(out, "<div class=\"video\"><iframe src=\"" + Paths.escape(address) + "\" title=\"Video\" loading=\"lazy\" allowfullscreen></iframe></div>\n")
+}
+
+/// A row of columns sized by their spans.
+fn grid(out: Phrase.Out, columns: &Array[Syntax.Column], context: &Phrase.Scope, origin: Str) -> Phrase.Out {
+  var held = Phrase.emit(out, "<div class=\"row\">\n")
+  for column in *columns {
+    let opened = Phrase.emit(held, "<div class=\"column\" style=\"flex-grow: " + show(column.span) + "\">\n")
+    held = Phrase.emit(sequence(opened, &column.blocks, context, origin, false), "</div>\n")
+  }
+  Phrase.emit(held, "</div>\n")
+}
+
+/// A figure with optional lightbox link and caption.
+fn image(out: Phrase.Out, figure: &Syntax.Figure, context: &Phrase.Scope, origin: Str) -> Phrase.Out {
+  let (checked, src) = Phrase.destination(out, &Syntax.Target{destination: figure.source, title: "", line: figure.line}, context, origin, true)
+  if src.isEmpty() { return checked }
+  let alt = if figure.kind == "icon" { "" } else { figure.alt }
+  let picture = "<img src=\"" + Paths.escape(src) + "\" alt=\"" + Paths.escape(alt) + "\" loading=\"lazy\">"
+  var held = Phrase.emit(checked, "<figure class=\"image image-" + Paths.escape(figure.kind) + "\">")
+  if figure.lightbox.isEmpty() { held = Phrase.emit(held, picture) } else {
+    let (linked, large) = Phrase.destination(held, &Syntax.Target{destination: figure.lightbox, title: "", line: figure.line}, context, origin, true)
+    held = if large.isEmpty() { Phrase.emit(linked, picture) } else { Phrase.emit(linked, "<a href=\"" + Paths.escape(large) + "\">" + picture + "</a>") }
+  }
+  if !figure.caption.isEmpty() {
+    let tag = if figure.kind == "complex" { "details" } else { "figcaption" }
+    let lead = if figure.kind == "complex" { "<details><summary>Description</summary>\n" } else { "<figcaption>\n" }
+    held = Phrase.emit(sequence(Phrase.emit(held, lead), &figure.caption, context, origin, false), "</" + tag + ">")
+  }
+  Phrase.emit(held, "</figure>\n")
+}

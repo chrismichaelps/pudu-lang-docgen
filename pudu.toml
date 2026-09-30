@@ -9,3 +9,5 @@ source = "src"
 root = "PuduLangDocgen"
 
 [dependencies]
+"@chrismichaelps/pudu-lang-log" = "=0.1.0"
+"@chrismichaelps/pudu-lang-validator" = "=0.1.1"

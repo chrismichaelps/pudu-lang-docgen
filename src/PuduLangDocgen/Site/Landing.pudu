@@ -1,0 +1,129 @@
+/** @Docgen.Site.Landing — hub pages with a banner, highlighted links, and topic lists */
+module PuduLangDocgen.Site.Landing
+
+import Std.Map as Map
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Markdown.Syntax as Syntax
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Site.LandingPage — the rendered title, body, outline, and findings of a hub page */
+export type Rendered = { title: Str, body: Str, headings: Array[Docgen.Heading], links: Array[Docgen.Link], diagnostics: Array[Docgen.Diagnostic] }
+
+/// Marker on the first line of a landing file.
+export const MARKER: Str = "YamlMime:Landing"
+
+/// Labels shown above highlighted links, by `itemType`.
+const LABELS: Map[Str, Str] = mapOf([
+    ("overview", "Overview"), ("get-started", "Get started"), ("quickstart", "Quickstart"), ("concept", "Concept"),
+    ("tutorial", "Tutorial"), ("how-to-guide", "How-to guide"), ("reference", "Reference"), ("whats-new", "What's new"),
+    ("download", "Download"), ("deploy", "Deploy"), ("architecture", "Architecture"), ("sample", "Sample")
+  ])
+
+/// A hub page: `title`, an optional `summary` shown in the banner, `highlightedContent.items`
+/// with `title`, `itemType`, and `url`, `conceptualContent.items` with a `title`, `links` of
+/// `text` and `url`, and an optional `footerLink`, and `additionalContent.sections` whose
+/// `items` have a `title`, `summary`, and `url`. Local addresses are checked like article links.
+/// A `metadata` object sets the page's metadata, such as `uid` and `description`, when read.
+export fn render(value: &Docgen.Meta, context: &Phrase.Scope) -> Result[Rendered, Str] {
+  let fields = match value {
+    case Docgen.Fields(found) => found
+    case _ => { return Err("landing page must be an object") }
+  }
+  let title = Meta.textOr(&fields, "title", "")
+  if title.isEmpty() { return Err("landing page needs a title") }
+  var out = Phrase.start()
+  var headings = [Docgen.Heading{id: Paths.slug(title), title: title, level: 1}]
+  let summary = Meta.textOr(&fields, "summary", "")
+  let lead = if summary.isEmpty() { "" } else { "<p class=\"landing-summary\">" + Paths.escape(summary) + "</p>" }
+  var pieces = ["<section class=\"landing-hero\"><div class=\"landing-inner\"><h1 id=\"" + Paths.escape(Paths.slug(title)) + "\">" + Paths.escape(title) + "</h1>" + lead + "</div></section>"]
+  let highlighted = objects(&Meta.fieldsOf(&fields, "highlightedContent"), "items", "highlighted item") ?
+  if !highlighted.isEmpty() {
+    var cards: Array[Str] = []
+    for item in highlighted {
+      let kind = Meta.textOr(&item, "itemType", "")
+      let label = match Map.get(&LABELS, kind) {
+        case Some(found) => found
+        case None => { return Err("highlighted item has an unknown itemType: " + kind) }
+      }
+      let (linked, href) = link(out, &item, "url", context)
+      out = linked
+      cards = cards.push("<li class=\"landing-highlight\"><a href=\"" + Paths.escape(href) + "\"><span class=\"landing-kind\">" + Paths.escape(label) + "</span><span class=\"landing-link\">" + Paths.escape(required(&item, "title", "highlighted item") ?) + "</span></a></li>")
+    }
+    pieces = pieces.push("<ul class=\"landing-highlights landing-inner\">" + cards.join("") + "</ul>")
+  }
+  let conceptual = Meta.fieldsOf(&fields, "conceptualContent")
+  let topics = objects(&conceptual, "items", "topic") ?
+  if !topics.isEmpty() {
+    let heading = Meta.textOr(&conceptual, "title", "")
+    var cards: Array[Str] = []
+    for topic in topics {
+      let name = required(&topic, "title", "topic") ?
+      var entries: Array[Str] = []
+      for entry in objects(&topic, "links", "topic link") ? {
+        let (linked, href) = link(out, &entry, "url", context)
+        out = linked
+        entries = entries.push("<li><a href=\"" + Paths.escape(href) + "\">" + Paths.escape(required(&entry, "text", "topic link") ?) + "</a></li>")
+      }
+      var card = ["<article class=\"landing-card\"><h3>" + Paths.escape(name) + "</h3><ul>" + entries.join("") + "</ul>"]
+      let footer = Meta.fieldsOf(&topic, "footerLink")
+      if !footer.isEmpty() {
+        let (linked, href) = link(out, &footer, "url", context)
+        out = linked
+        card = card.push("<p class=\"landing-more\"><a href=\"" + Paths.escape(href) + "\">" + Paths.escape(required(&footer, "text", "footer link") ?) + "</a></p>")
+      }
+      cards = cards.push(card.push("</article>").join(""))
+    }
+    pieces = pieces.push(section(heading, "landing-topics", cards))
+    if !heading.isEmpty() { headings = headings.push(Docgen.Heading{id: Paths.slug(heading), title: heading, level: 2}) }
+  }
+  for block in objects(&Meta.fieldsOf(&fields, "additionalContent"), "sections", "section") ? {
+    let heading = Meta.textOr(&block, "title", "")
+    var cards: Array[Str] = []
+    for item in objects(&block, "items", "related item") ? {
+      let (linked, href) = link(out, &item, "url", context)
+      out = linked
+      let text = Meta.textOr(&item, "summary", "")
+      cards = cards.push("<article class=\"landing-card\"><h3><a href=\"" + Paths.escape(href) + "\">" + Paths.escape(required(&item, "title", "related item") ?) + "</a></h3>" + (if text.isEmpty() { "" } else { "<p>" + Paths.escape(text) + "</p>" }) + "</article>")
+    }
+    pieces = pieces.push(section(heading, "landing-related", cards))
+    if !heading.isEmpty() { headings = headings.push(Docgen.Heading{id: Paths.slug(heading), title: heading, level: 2}) }
+  }
+  Ok(Rendered{title: title, body: pieces.join("\n"), headings: headings, links: out.links, diagnostics: out.diagnostics})
+}
+
+/// A band of cards under an optional heading.
+fn section(heading: Str, kind: Str, cards: Array[Str]) -> Str {
+  let title = if heading.isEmpty() { "" } else { "<h2 id=\"" + Paths.escape(Paths.slug(heading)) + "\">" + Paths.escape(heading) + "</h2>" }
+  "<section class=\"" + kind + " landing-inner\">" + title + "<div class=\"landing-cards\">" + cards.join("") + "</div></section>"
+}
+
+/// The checked browser destination of an entry's address.
+fn link(out: Phrase.Out, entry: &Array[(Str, Docgen.Meta)], key: Str, context: &Phrase.Scope) -> (Phrase.Out, Str) {
+  Phrase.destination(out, &Syntax.Target{destination: Meta.textOr(entry, key, ""), title: "", line: 1}, context, context.source, false)
+}
+
+/// Text under a key that must not be empty.
+fn required(entry: &Array[(Str, Docgen.Meta)], key: Str, noun: Str) -> Result[Str, Str] {
+  let found = Meta.textOr(entry, key, "")
+  if found.isEmpty() { Err("each " + noun + " needs a " + key) } else { Ok(found) }
+}
+
+/// The objects listed under a key; a missing key lists none.
+fn objects(fields: &Array[(Str, Docgen.Meta)], key: Str, noun: Str) -> Result[Array[Array[(Str, Docgen.Meta)]], Str] {
+  match Meta.get(fields, key) {
+    case Some(Docgen.Items(listed)) => {
+      var result: Array[Array[(Str, Docgen.Meta)]] = []
+      for held in listed {
+        match held {
+          case Docgen.Fields(found) => { result = result.push(found) }
+          case _ => { return Err("each " + noun + " must be an object") }
+        }
+      }
+      Ok(result)
+    }
+    case None => Ok([])
+    case _ => Err(key + " must be a list")
+  }
+}

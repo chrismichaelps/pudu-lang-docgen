@@ -1,0 +1,148 @@
+/** @Docgen.Rest.Tests — interface descriptions become operation and schema references */
+module PuduLangDocgen.RestTest
+
+import Std.Io as Io
+import Std.Json as Json
+import Std.Result as Result
+import Std.Test as Test
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Rest.OpenApi as OpenApi
+import PuduLangDocgen.Rest.Pages as Pages
+import PuduLangDocgen.Yaml as Yaml
+
+/// A current-format description with shared parameters, references, and schemas.
+fn current() -> Str {
+  [
+    "openapi: 3.0.3",
+    "info:",
+    "  title: Pet Store",
+    "  version: 1.2.0",
+    "  description: Manage **pets**.",
+    "servers:",
+    "  - url: https://pets.example/v1",
+    "paths:",
+    "  /pets/\{id\}:",
+    "    parameters:",
+    "      - $ref: '#/components/parameters/Id'",
+    "    get:",
+    "      operationId: getPet",
+    "      summary: Get a pet",
+    "      tags: [pets]",
+    "      responses:",
+    "        '200':",
+    "          description: The pet",
+    "          content:",
+    "            application/json:",
+    "              schema:",
+    "                $ref: '#/components/schemas/Pet'",
+    "        '404':",
+    "          description: Not found",
+    "    delete:",
+    "      operationId: deletePet",
+    "      deprecated: true",
+    "      responses:",
+    "        '204':",
+    "          description: Deleted",
+    "  /pets:",
+    "    post:",
+    "      operationId: addPet",
+    "      tags: [pets]",
+    "      requestBody:",
+    "        required: true",
+    "        content:",
+    "          application/json:",
+    "            schema:",
+    "              type: array",
+    "              items:",
+    "                $ref: '#/components/schemas/Pet'",
+    "      responses:",
+    "        '201':",
+    "          description: Created",
+    "components:",
+    "  parameters:",
+    "    Id:",
+    "      name: id",
+    "      in: path",
+    "      schema:",
+    "        type: integer",
+    "        format: int64",
+    "  schemas:",
+    "    Pet:",
+    "      type: object",
+    "      required: [name]",
+    "      properties:",
+    "        name:",
+    "          type: string",
+    "          description: Given name",
+    "        kind:",
+    "          $ref: '#/components/schemas/Kind'",
+    "    Kind:",
+    "      type: string",
+    "      enum: [cat, dog]"
+  ].join("\n")
+}
+
+/// An older-format description with a body parameter and a host.
+fn older() -> Str {
+  "\{\"swagger\": \"2.0\", \"info\": \{\"title\": \"Legacy\"\}, \"host\": \"legacy.example\", \"basePath\": \"/api\", \"paths\": \{\"/items\": \{\"post\": \{\"parameters\": [\{\"name\": \"item\", \"in\": \"body\", \"required\": true, \"schema\": \{\"$ref\": \"#/definitions/Item\"\}\}], \"responses\": \{\"200\": \{\"description\": \"ok\", \"schema\": \{\"type\": \"string\"\}\}\}\}\}\}, \"definitions\": \{\"Item\": \{\"type\": \"object\"\}\}\}"
+}
+
+/// A service read from YAML or JSON text, or an empty one.
+fn service(text: Str) -> OpenApi.Service {
+  let value = if text.startsWith("\{") {
+    match Json.decode(text) {
+      case Ok(found) => Meta.fromJson(&found)
+      case Err(_) => Docgen.Nothing
+    }
+  } else { Result.unwrapOr(Yaml.decode(text), Docgen.Nothing) }
+  match OpenApi.read(&value) {
+    case Ok(found) => found
+    case Err(_) => OpenApi.Service{title: "", version: "", description: "", servers: [], operations: [], schemas: []}
+  }
+}
+
+/// The failure message of a description that does not read.
+fn refused(text: Str) -> Str {
+  match OpenApi.read(&Result.unwrapOr(Yaml.decode(text), Docgen.Nothing)) {
+    case Ok(_) => "accepted"
+    case Err(reason) => reason
+  }
+}
+
+/// Runs every reading, description, page, and identity contract.
+fn main() -> Int {
+  let pets = service(current())
+  let legacy = service(older())
+  let context = Phrase.Scope{page: "rest/pets.html", source: "docs/rest/pets.yml", outputs: mapOf([]), references: mapOf([]), settings: Phrase.rendering()}
+  let (page, references, problems) = Pages.page(&pets, "pets", &context)
+  let checks = Test.suite("Rest", &[
+      Test.equals("recognized", &[OpenApi.recognizes(&Result.unwrapOr(Yaml.decode(current()), Docgen.Nothing)), OpenApi.recognizes(&Docgen.Fields([("title", Docgen.Text("x"))]))], &[true, false]),
+      Test.equals("title and version", &(pets.title, pets.version), &("Pet Store", "1.2.0")),
+      Test.equals("servers", &[pets.servers, legacy.servers], &[["https://pets.example/v1"], ["https://legacy.example/api"]]),
+      Test.equals("operations in path order", &pets.operations.map(|held: OpenApi.Operation| held.method + " " + held.id), &["GET getPet", "DELETE deletePet", "POST addPet"]),
+      Test.equals("shared path parameter", &pets.operations[0].parameters, &[OpenApi.Parameter{name: "id", location: "path", required: true, kind: "integer (int64)", description: ""}]),
+      Test.equals("response content", &pets.operations[0].responses[0].payloads, &[OpenApi.Payload{media: "application/json", kind: "Pet"}]),
+      Test.equals("request body", &(pets.operations[2].body, pets.operations[2].bodyRequired), &([OpenApi.Payload{media: "application/json", kind: "array of Pet"}], true)),
+      Test.equals("deprecated flag", &pets.operations[1].deprecated, &true),
+      Test.equals("schemas sorted", &pets.schemas.map(|held: OpenApi.Schema| held.name), &["Kind", "Pet"]),
+      Test.equals("schema properties", &pets.schemas[1].properties, &[OpenApi.Property{name: "name", kind: "string", required: true, description: "Given name"}, OpenApi.Property{name: "kind", kind: "Kind", required: false, description: ""}]),
+      Test.equals("enumerations", &pets.schemas[0].values, &["cat", "dog"]),
+      Test.equals("body parameter becomes a payload", &legacy.operations[0].body, &[OpenApi.Payload{media: "application/json", kind: "Item"}]),
+      Test.equals("older response schema", &legacy.operations[0].responses[0].payloads[0].kind, &"string"),
+      Test.equals("generated operation id", &legacy.operations[0].id, &"post /items"),
+      Test.equals("title required", &refused("openapi: 3.0.0\ninfo:\n  version: 1"), &"interface description needs info.title"),
+      Test.equals("describe combinations", &OpenApi.describe(&Docgen.Fields([("oneOf", Docgen.Items([Docgen.Fields([("type", Docgen.Text("string"))]), Docgen.Fields([("$ref", Docgen.Text("#/definitions/A"))])]))])), &"string or A"),
+      Test.equals("references", &references.map(|held: Docgen.Reference| held.uid + " " + held.href), &["pets rest/pets.html", "pets.getPet rest/pets.html#getpet", "pets.addPet rest/pets.html#addpet", "pets.deletePet rest/pets.html#deletepet", "pets.schemas.Kind rest/pets.html#schema-kind", "pets.schemas.Pet rest/pets.html#schema-pet"]),
+      Test.equals("no problems", &problems, &[]),
+      Test.equals("outline groups by tag", &page.headings.filter(|held: Docgen.Heading| held.level == 2).map(|held: Docgen.Heading| held.title), &["Servers", "pets", "Operations", "Schemas"]),
+      Test.that("method badge and path", page.body.contains("<span class=\"method method-get\">GET</span><code>/pets/\{id\}</code>")),
+      Test.that("schema links", page.body.contains("<a class=\"xref\" href=\"#schema-pet\">Pet</a>")),
+      Test.that("description rendered", page.body.contains("<strong>pets</strong>")),
+      Test.that("deprecated badge", page.body.contains("<span class=\"badge deprecated\">Deprecated</span>"))
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

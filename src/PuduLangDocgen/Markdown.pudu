@@ -1,0 +1,121 @@
+/** @Docgen.Markdown.Module — article text parsed into metadata and a block tree */
+module PuduLangDocgen.Markdown
+
+import Std.Map as Map
+import Std.Set as Set
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown.Blocks as Blocks
+import PuduLangDocgen.Markdown.Directives as Directives
+import PuduLangDocgen.Markdown.FrontMatter as FrontMatter
+import PuduLangDocgen.Markdown.Layout as Layout
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Markdown.Render as Render
+import PuduLangDocgen.Markdown.Snippet as Snippet
+import PuduLangDocgen.Markdown.Syntax as Syntax
+
+/** @Docgen.Markdown.Article — front matter, blocks, and parse diagnostics of one file */
+export type Article = { meta: Array[(Str, Docgen.Meta)], blocks: Array[Syntax.Block], diagnostics: Array[Docgen.Diagnostic] }
+
+/// Alert kinds every article may use.
+export const ALERTS: Array[Str] = ["NOTE", "TIP", "IMPORTANT", "CAUTION", "WARNING"]
+
+/// An article written at a project-relative path. `files` holds the text of every file it may
+/// include or excerpt; `alerts` adds alert kinds to the built-in ones.
+export fn parse(origin: Str, text: Str, files: &Map[Str, Str], alerts: &Array[Str]) -> Article {
+  let header = match FrontMatter.split(text) {
+    case Ok(found) => found
+    case Err((line, message)) => { return Article{meta: [], blocks: [], diagnostics: [Docgen.error(Codes.FRONT_MATTER_INVALID, origin, line, message)]} }
+  }
+  let (found, rest) = Layout.definitions(&header.lines)
+  let kinds = setOf(ALERTS.concat(alerts.map(|kind: Str| kind.toUpper())))
+  let env = Blocks.Env{..Blocks.environment(origin, files, &kinds), definitions: found}
+  let parsed = Blocks.parse(&rest, &env, 0)
+  Article{meta: header.meta, blocks: parsed.blocks, diagnostics: parsed.diagnostics}
+}
+
+/// Documentation text written inside another page, rendered with its headings lowered by
+/// `demote` levels so they sit below the page's own sections.
+export fn fragment(text: Str, context: &Phrase.Scope, demote: Int) -> Render.Rendered {
+  let article = parse(context.source, text, &mapOf([]), &[])
+  let blocks = article.blocks.map(fn(block: Syntax.Block) -> Syntax.Block {
+      match block {
+        case Syntax.Heading(title) => Syntax.Heading(Syntax.Title{..title, level: if title.level + demote > 6 { 6 } else { title.level + demote }})
+        case other => other
+      }
+    })
+  let rendered = Render.render(&blocks, context)
+  Render.Rendered{..rendered, diagnostics: article.diagnostics.concat(rendered.diagnostics)}
+}
+
+/// Sources of the PlantUML diagrams in blocks, in order, each listed once.
+export fn diagrams(blocks: &Array[Syntax.Block]) -> Array[Str] {
+  var found: Array[Str] = []
+  for block in *blocks {
+    let nested = match block {
+      case Syntax.CodeBlock(sample) => {
+        let language = sample.language.toLower()
+        if language == "plantuml" || language == "puml" { [sample.text] } else { [] }
+      }
+      case Syntax.Quote(children) => diagrams(&children)
+      case Syntax.Alert(notice) => diagrams(&notice.blocks)
+      case Syntax.Included(_path, children) => diagrams(&children)
+      case Syntax.ListBlock(listing) => within(&listing.items.map(|item: Syntax.Item| item.blocks))
+      case Syntax.TabGroup(group) => within(&group.map(|tab: Syntax.Tab| tab.blocks))
+      case Syntax.Grid(columns) => within(&columns.map(|column: Syntax.Column| column.blocks))
+      case Syntax.Footnote(_label, children) => diagrams(&children)
+      case _ => []
+    }
+    for text in nested {
+      if !found.contains(text) { found = found.push(text) }
+    }
+  }
+  found
+}
+
+/// Diagram sources of several block lists in order.
+fn within(groups: &Array[Array[Syntax.Block]]) -> Array[Str] {
+  var found: Array[Str] = []
+  for group in *groups { found = found.concat(diagrams(&group)) }
+  found
+}
+
+/// Project-relative paths an article includes or excerpts, in first-mention order.
+/// Paths that cannot be located are left for parsing to report.
+export fn dependencies(origin: Str, text: Str) -> Array[Str] {
+  var found: Array[Str] = []
+  for line in text.split("\n") {
+    var written: Array[Str] = []
+    match Directives.include(line) {
+      case Some((_title, path)) => { written = written.push(path) }
+      case None => {}
+    }
+    match Directives.excerpt(line) {
+      case Some(held) => { written = written.push(held.destination) }
+      case None => {}
+    }
+    match Directives.colon(line) {
+      case Some(held) => { if held.name == "code" { written = written.push(Directives.value(&held, "source")) } }
+      case None => {}
+    }
+    var rest = line
+    while rest.toUpper().contains("[!INCLUDE") {
+      let at = rest.toUpper().indexOf("[!INCLUDE")
+      rest = rest.drop(at + 9)
+      let open = rest.indexOf("](")
+      let close = rest.indexOf(")")
+      if open >= 0 && close > open { written = written.push(rest.drop(open + 2).take(close - open - 2).trim()) }
+    }
+    for path in written {
+      let target = match Snippet.selection(path) {
+        case Ok(chosen) => chosen.path
+        case Err(_) => path
+      }
+      match Layout.locate(origin, target) {
+        case Ok(located) => { if !found.contains(located) { found = found.push(located) } }
+        case Err(_) => {}
+      }
+    }
+  }
+  found
+}

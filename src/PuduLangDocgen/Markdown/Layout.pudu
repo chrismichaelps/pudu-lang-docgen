@@ -1,0 +1,320 @@
+/** @Docgen.Markdown.Layout — line-level recognition of block boundaries */
+module PuduLangDocgen.Markdown.Layout
+
+import Std.Char as Char
+import Std.Map as Map
+import Std.Option as Option
+import Std.Set as Set
+import PuduLangDocgen.Inline as Inline
+import PuduLangDocgen.Markdown.FrontMatter as FrontMatter
+import PuduLangDocgen.Markdown.Syntax as Syntax
+import PuduLangDocgen.Paths as Paths
+
+/// Elements that open an HTML block wherever a line starts with them.
+const BLOCK_ELEMENTS: Set[Str] = setOf([
+    "address", "article", "aside", "blockquote", "center", "details", "dialog", "div", "dl", "dd", "dt",
+    "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr",
+    "iframe", "li", "main", "nav", "ol", "p", "pre", "script", "section", "style", "summary", "table",
+    "tbody", "td", "tfoot", "th", "thead", "tr", "ul"
+  ])
+
+/** @Docgen.Markdown.Fence — an opening code fence and its info text */
+export type Fence = { marker: Char, length: Int, indent: Int, info: Str }
+
+/** @Docgen.Markdown.Marker — a list item marker and the content after it */
+export type Marker = { ordered: Bool, start: Int, symbol: Char, width: Int, rest: Str }
+
+/// Leading indentation in columns, with tabs advancing to the next multiple of four.
+export fn indent(text: Str) -> Int {
+  var columns = 0
+  for character in text.chars() {
+    if character == ' ' { columns = columns + 1 } else if character == '\t' { columns = columns + 4 - columns % 4 } else { return columns }
+  }
+  columns
+}
+
+/// Text with up to the given columns of leading indentation removed.
+export fn strip(text: Str, columns: Int) -> Str {
+  var removed = 0
+  var index = 0
+  let cs = text.chars()
+  while index < cs.length() && removed < columns {
+    if cs[index] == ' ' { removed = removed + 1 } else if cs[index] == '\t' {
+      let width = 4 - removed % 4
+      if removed + width > columns {
+        var padding: Array[Str] = []
+        for _extra in 0..(removed + width - columns) { padding = padding.push(" ") }
+        return padding.join("") + text.drop(index + 1)
+      }
+      removed = removed + width
+    } else { return text.drop(index) }
+    index = index + 1
+  }
+  text.drop(index)
+}
+
+/// Whether a line holds only white space.
+export fn blank(text: Str) -> Bool { text.trim().isEmpty() }
+
+/// An opening fence of three or more backticks or tildes indented at most three columns.
+export fn fence(text: Str) -> Option[Fence] {
+  let depth = indent(text)
+  if depth > 3 { return None }
+  let body = strip(text, depth)
+  let first = if body.isEmpty() { ' ' } else { body.chars()[0] }
+  if first != '`' && first != '~' { return None }
+  var length = 0
+  for character in body.chars() {
+    if character != first { break }
+    length = length + 1
+  }
+  if length < 3 { return None }
+  let info = body.drop(length).trim()
+  if first == '`' && info.contains("`") { return None }
+  Some(Fence{marker: first, length: length, indent: depth, info: info})
+}
+
+/// Whether a line closes a fence: the same character, at least as long, nothing after it.
+export fn closes(text: Str, opened: &Fence) -> Bool {
+  if indent(text) > 3 { return false }
+  let body = text.trim()
+  if body.length() < opened.length { return false }
+  for character in body.chars() {
+    if character != opened.marker { return false }
+  }
+  true
+}
+
+/// Whether a line is a thematic break of three or more `-`, `*`, or `_`.
+export fn thematic(text: Str) -> Bool {
+  if indent(text) > 3 { return false }
+  let body = text.trim().replace(" ", "").replace("\t", "")
+  if body.length() < 3 { return false }
+  let first = body.chars()[0]
+  if first != '-' && first != '*' && first != '_' { return false }
+  for character in body.chars() {
+    if character != first { return false }
+  }
+  true
+}
+
+/// An ATX heading as level, content, and explicit `{#id}`.
+export fn atx(text: Str) -> Option[(Int, Str, Str)] {
+  if indent(text) > 3 { return None }
+  let body = text.trim()
+  var level = 0
+  for character in body.chars() {
+    if character != '#' { break }
+    level = level + 1
+  }
+  if level < 1 || level > 6 { return None }
+  let after = body.drop(level)
+  if !after.isEmpty() && !after.startsWith(" ") && !after.startsWith("\t") { return None }
+  var content = after.trim()
+  var cut = content.length()
+  while cut > 0 && content.chars()[cut - 1] == '#' { cut = cut - 1 }
+  if cut == 0 { content = "" } else if cut < content.length() && content.chars()[cut - 1] == ' ' { content = content.take(cut).trim() }
+  var id = ""
+  if content.endsWith("\}") {
+    let open = content.indexOf("\{#")
+    if open >= 0 && !content.drop(open + 2).contains(" ") {
+      id = content.drop(open + 2).take(content.length() - open - 3)
+      content = content.take(open).trim()
+    }
+  }
+  Some((level, content, id))
+}
+
+/// The level of a setext underline: 1 for `=`, 2 for `-`, 0 for neither.
+export fn setext(text: Str) -> Int {
+  if indent(text) > 3 { return 0 }
+  let body = text.trim()
+  if body.isEmpty() { return 0 }
+  let first = body.chars()[0]
+  if first != '=' && first != '-' { return 0 }
+  for character in body.chars() {
+    if character != first { return 0 }
+  }
+  if first == '=' { 1 } else { 2 }
+}
+
+/// A bullet or ordered list marker and the content column after it.
+export fn marker(text: Str) -> Option[Marker] {
+  let depth = indent(text)
+  if depth > 3 { return None }
+  let body = strip(text, depth)
+  let cs = body.chars()
+  if cs.isEmpty() { return None }
+  var ordered = false
+  var start = 1
+  var symbol = cs[0]
+  var used = 1
+  if cs[0] == '-' || cs[0] == '*' || cs[0] == '+' { used = 1 } else if Char.isDigit(cs[0]) {
+    var digits = 0
+    while digits < cs.length() && digits < 10 && Char.isDigit(cs[digits]) { digits = digits + 1 }
+    if digits > 9 || digits >= cs.length() || (cs[digits] != '.' && cs[digits] != ')') { return None }
+    ordered = true
+    symbol = cs[digits]
+    start = body.take(digits).toInt() ?
+    used = digits + 1
+  } else { return None }
+  let after = body.drop(used)
+  if !after.isEmpty() && !after.startsWith(" ") && !after.startsWith("\t") { return None }
+  let spaces = indent(after)
+  let gap = if after.trim().isEmpty() { 1 } else if spaces > 4 { 1 } else { spaces }
+  Some(Marker{ordered: ordered, start: start, symbol: symbol, width: depth + used + gap, rest: strip(after, gap)})
+}
+
+/// The content of a block quote line without its `>` marker.
+export fn quote(text: Str) -> Option[Str] {
+  let depth = indent(text)
+  if depth > 3 { return None }
+  let body = strip(text, depth)
+  if !body.startsWith(">") { return None }
+  let rest = body.drop(1)
+  Some(if rest.startsWith(" ") { rest.drop(1) } else if rest.startsWith("\t") { strip(rest, 1) } else { rest })
+}
+
+/// Cells of a pipe table row; escaped pipes and pipes inside code spans stay in their cell.
+export fn cells(text: Str) -> Array[Str] {
+  var held = text.trim()
+  if held.startsWith("|") { held = held.drop(1) }
+  if held.endsWith("|") && !held.endsWith("\\|") { held = held.take(held.length() - 1) }
+  var result: Array[Str] = []
+  var current: Array[Str] = []
+  var code = false
+  let cs = held.chars()
+  var index = 0
+  while index < cs.length() {
+    let character = cs[index]
+    if character == '\\' && index + 1 < cs.length() && cs[index + 1] == '|' {
+      current = current.push("|")
+      index = index + 2
+      continue
+    }
+    if character == '`' { code = !code }
+    if character == '|' && !code {
+      result = result.push(current.join("").trim())
+      current = []
+    } else { current = current.push(character.toText()) }
+    index = index + 1
+  }
+  result.push(current.join("").trim())
+}
+
+/// Column alignments of a table delimiter row, or none when the line is not one.
+export fn alignments(text: Str) -> Option[Array[Str]] {
+  if !text.contains("-") || indent(text) > 3 { return None }
+  if !text.contains("|") && !text.trim().startsWith(":") { return None }
+  var result: Array[Str] = []
+  for cell in cells(text) {
+    let core = cell.replace(":", "")
+    if core.length() < 1 || core.replace("-", "").length() > 0 { return None }
+    let left = cell.startsWith(":")
+    let right = cell.endsWith(":")
+    result = result.push(if left && right { "center" } else if right { "right" } else if left { "left" } else { "" })
+  }
+  Some(result)
+}
+
+/// Whether a line opens an HTML block: a comment, a block-level element, or a line holding
+/// exactly one tag.
+export fn html(text: Str) -> Bool {
+  if indent(text) > 3 { return false }
+  let body = text.trim()
+  if body.startsWith("<!--") { return true }
+  if !body.startsWith("<") || body.length() < 3 { return false }
+  let rest = if body.drop(1).startsWith("/") { body.drop(2) } else { body.drop(1) }
+  let cs = rest.chars()
+  if cs.isEmpty() || !Char.isLetter(cs[0]) { return false }
+  var index = 0
+  while index < cs.length() && (Char.isAlphanumeric(cs[index]) || cs[index] == '-') { index = index + 1 }
+  if index < cs.length() && cs[index] != ' ' && cs[index] != '>' && cs[index] != '/' && cs[index] != '\t' { return false }
+  if Set.contains(&BLOCK_ELEMENTS, rest.take(index).toLower()) { return true }
+  body.endsWith(">") && body.indexOf(">") == body.length() - 1
+}
+
+/// Whether a line ends a paragraph by starting another block.
+export fn interrupts(text: Str) -> Bool {
+  if blank(text) || thematic(text) || Option.isSome(&atx(text)) || Option.isSome(&fence(text)) || Option.isSome(&quote(text)) || html(text) { return true }
+  if text.trim().startsWith(":::") || text.trim().startsWith("$$") { return true }
+  match marker(text) {
+    case Some(found) => !found.rest.trim().isEmpty() && (!found.ordered || found.start == 1)
+    case None => false
+  }
+}
+
+/// A link reference definition `[label]: destination "title"`.
+export fn definition(text: Str, number: Int) -> Option[(Str, Syntax.Target)] {
+  if indent(text) > 3 { return None }
+  let body = text.trim()
+  if !body.startsWith("[") || body.startsWith("[!") || body.startsWith("[^") { return None }
+  let close = body.indexOf("]:")
+  if close < 2 { return None }
+  let name = Inline.label(body.drop(1).take(close - 1))
+  if name.isEmpty() { return None }
+  let rest = body.drop(close + 2).trim()
+  if rest.isEmpty() { return None }
+  var destination = rest.split(" ")[0]
+  if destination.startsWith("<") && destination.endsWith(">") { destination = destination.drop(1).take(destination.length() - 2) }
+  let after = rest.drop(rest.split(" ")[0].length()).trim()
+  var title = ""
+  if !after.isEmpty() {
+    let quoteMark = after.take(1)
+    let closing = if quoteMark == "(" { ")" } else { quoteMark }
+    if (quoteMark != "\"" && quoteMark != "'" && quoteMark != "(") || !after.endsWith(closing) || after.length() < 2 { return None }
+    title = after.drop(1).take(after.length() - 2)
+  }
+  Some((name, Syntax.Target{destination: destination, title: title, line: number}))
+}
+
+/// Link reference definitions outside code, and the lines that remain.
+export fn definitions(lines: &Array[FrontMatter.Line]) -> (Map[Str, Syntax.Target], Array[FrontMatter.Line]) {
+  var found: Map[Str, Syntax.Target] = mapOf([])
+  var kept: Array[FrontMatter.Line] = []
+  var open: Option[Fence] = None
+  var previousBlank = true
+  for line in *lines {
+    var dropped = false
+    match open {
+      case Some(opened) => { if closes(line.text, &opened) { open = None } }
+      case None => {
+        open = fence(line.text)
+        if Option.isNone(&open) && previousBlank {
+          match definition(line.text, line.number) {
+            case Some((name, target)) => {
+              if !Map.containsKey(&found, name) { found = Map.insert(&found, name, target) }
+              dropped = true
+            }
+            case None => {}
+          }
+        }
+      }
+    }
+    if !dropped {
+      kept = kept.push(line)
+      previousBlank = blank(line.text)
+    }
+  }
+  (found, kept)
+}
+
+/// The project-relative path a file names from the file that mentions it.
+export fn locate(origin: Str, written: Str) -> Result[Str, Str] {
+  if written.isEmpty() || Paths.remote(written) || written.startsWith("/") || written.contains("\\") { return Err("path must be relative: " + written) }
+  if written.contains("%") { return Err("encoded path is not supported: " + written) }
+  let joined = Paths.join(Paths.directoryOf(origin), Paths.pathOf(written)) ?
+  if !Paths.relative(joined) { return Err("path is not portable: " + written) }
+  Ok(joined)
+}
+
+/// Line numbers of ranges limited to the lines a sample has.
+export fn expand(bounds: &Array[(Int, Int)], count: Int) -> Array[Int] {
+  var result: Array[Int] = []
+  for number in 1..(count + 1) {
+    for (first, last) in *bounds {
+      if number >= first && number <= last && !result.contains(number) { result = result.push(number) }
+    }
+  }
+  result
+}

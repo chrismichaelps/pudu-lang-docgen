@@ -1,0 +1,205 @@
+/** @Docgen.Rest.Pages — HTTP interface reference pages with linked schemas */
+module PuduLangDocgen.Rest.Pages
+
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown as Markdown
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.Rest.OpenApi as OpenApi
+
+/** @Docgen.Rest.Body — page HTML with its outline, links, and findings */
+type Body = { pieces: Array[Str], headings: Array[Docgen.Heading], links: Array[Docgen.Link], diagnostics: Array[Docgen.Diagnostic] }
+
+/// Tag grouping operations that declare none.
+const UNTAGGED: Str = "Operations"
+
+/// The page of a service and the identities of its operations and schemas. The service's own
+/// identity is `uid`; operations are `uid.operationId` and schemas `uid.schemas.Name`.
+export fn page(service: &OpenApi.Service, uid: Str, context: &Phrase.Scope) -> (Docgen.Page, Array[Docgen.Reference], Array[Docgen.Diagnostic]) {
+  var body = Body{pieces: [], headings: [], links: [], diagnostics: []}
+  let version = if service.version.isEmpty() { "" } else { "<span class=\"rest-version\">" + Paths.escape(service.version) + "</span>" }
+  body = emit(body, "<div class=\"api-heading\"><p class=\"api-kind\">HTTP API</p><h1 id=\"" + Paths.escape(Paths.slug(service.title)) + "\">" + Paths.escape(service.title) + version + "</h1></div>\n")
+  body = documentation(body, service.description, context)
+  if !service.servers.isEmpty() {
+    body = emit(section(body, 2, "servers", "Servers"), "<ul class=\"api-list\">\n")
+    for server in service.servers { body = emit(body, "<li><code>" + Paths.escape(server) + "</code></li>\n") }
+    body = emit(body, "</ul>\n")
+  }
+  var references: Array[Docgen.Reference] = [Docgen.Reference{uid: uid, name: service.title, fullName: service.title, href: context.page, kind: "rest"}]
+  for tag in tags(&service.operations) {
+    body = section(body, 2, "tag-" + Paths.slug(tag), tag)
+    for operation in service.operations.filter(|held: OpenApi.Operation| held.tags.contains(tag) || (held.tags.isEmpty() && tag == UNTAGGED)) {
+      let id = Paths.slug(operation.id)
+      if references.filter(|held: Docgen.Reference| held.uid == uid + "." + operation.id).isEmpty() {
+        references = references.push(Docgen.Reference{uid: uid + "." + operation.id, name: operation.id, fullName: operation.method + " " + operation.path, href: context.page + "#" + id, kind: "operation"})
+      }
+      body = operationSection(body, &operation, id, context, "")
+    }
+  }
+  if !service.schemas.isEmpty() {
+    body = section(body, 2, "schemas", "Schemas")
+    for schema in service.schemas {
+      let id = "schema-" + Paths.slug(schema.name)
+      references = references.push(Docgen.Reference{uid: uid + ".schemas." + schema.name, name: schema.name, fullName: schema.name, href: context.page + "#" + id, kind: "schema"})
+      body = schemaSection(body, &schema, id, context)
+    }
+  }
+  let found = Docgen.Page{path: context.page, source: context.source, kind: "rest", title: service.title, uid: uid, summary: summaryOf(service.description), body: body.pieces.join(""), headings: body.headings, links: body.links, meta: []}
+  (found, references, body.diagnostics)
+}
+
+/// A service spread over several pages: an overview holding servers and schemas, a page per
+/// tag when `byTag`, and a page per operation when `byOperation`. Sub-pages live in a folder
+/// named after the overview page.
+export fn split(service: &OpenApi.Service, uid: Str, context: &Phrase.Scope, byTag: Bool, byOperation: Bool) -> (Array[Docgen.Page], Array[Docgen.Reference], Array[Docgen.Diagnostic]) {
+  let root = context.page
+  let folder = if root.endsWith(".html") { root.take(root.length() - 5) } else { root }
+  let schemaHref = |from: Str| Paths.between(from, root)
+  var pages: Array[Docgen.Page] = []
+  var references: Array[Docgen.Reference] = [Docgen.Reference{uid: uid, name: service.title, fullName: service.title, href: root, kind: "rest"}]
+  var problems: Array[Docgen.Diagnostic] = []
+  var overview = Body{pieces: [], headings: [], links: [], diagnostics: []}
+  overview = emit(overview, "<div class=\"api-heading\"><p class=\"api-kind\">HTTP API</p><h1 id=\"" + Paths.escape(Paths.slug(service.title)) + "\">" + Paths.escape(service.title) + "</h1></div>\n")
+  overview = documentation(overview, service.description, context)
+  if !service.servers.isEmpty() {
+    overview = emit(section(overview, 2, "servers", "Servers"), "<ul class=\"api-list\">\n" + service.servers.map(|server: Str| "<li><code>" + Paths.escape(server) + "</code></li>").join("\n") + "\n</ul>\n")
+  }
+  for tag in tags(&service.operations) {
+    let operations = service.operations.filter(|held: OpenApi.Operation| held.tags.contains(tag) || (held.tags.isEmpty() && tag == UNTAGGED))
+    let tagPage = folder + "/" + Paths.slug(tag) + ".html"
+    let listed = operations.map(fn(operation: OpenApi.Operation) -> Str {
+        let target = if byOperation { folder + "/" + Paths.slug(operation.id) + ".html" } else { tagPage + "#" + Paths.slug(operation.id) }
+        "<li><span class=\"method method-" + operation.method.toLower() + "\">" + operation.method + "</span> <a href=\"" + Paths.escape(Paths.between(root, target)) + "\">" + Paths.escape(if operation.summary.isEmpty() { operation.id } else { operation.summary }) + "</a></li>"
+      })
+    overview = emit(section(overview, 2, "tag-" + Paths.slug(tag), tag), "<ul class=\"api-list rest-index\">\n" + listed.join("\n") + "\n</ul>\n")
+    if byTag {
+      let located = Phrase.Scope{..*context, page: tagPage}
+      var body = emit(Body{pieces: [], headings: [], links: [], diagnostics: []}, "<div class=\"api-heading\"><p class=\"api-kind\">" + Paths.escape(service.title) + "</p><h1 id=\"" + Paths.escape(Paths.slug(tag)) + "\">" + Paths.escape(tag) + "</h1></div>\n")
+      for operation in operations {
+        if byOperation {
+          body = emit(body, "<p><span class=\"method method-" + operation.method.toLower() + "\">" + operation.method + "</span> <a href=\"" + Paths.escape(Paths.between(tagPage, folder + "/" + Paths.slug(operation.id) + ".html")) + "\">" + Paths.escape(operation.path) + "</a></p>\n")
+        } else { body = operationSection(body, &operation, Paths.slug(operation.id), &located, schemaHref(tagPage)) }
+      }
+      pages = pages.push(Docgen.Page{path: tagPage, source: context.source, kind: "rest", title: tag, uid: uid + ".tags." + tag, summary: "", body: body.pieces.join(""), headings: body.headings, links: body.links, meta: []})
+      problems = problems.concat(body.diagnostics)
+      references = references.push(Docgen.Reference{uid: uid + ".tags." + tag, name: tag, fullName: tag, href: tagPage, kind: "tag"})
+    }
+    for operation in operations {
+      if references.filter(|held: Docgen.Reference| held.uid == uid + "." + operation.id).isEmpty() {
+        let destination = if byOperation { folder + "/" + Paths.slug(operation.id) + ".html" } else if byTag { tagPage + "#" + Paths.slug(operation.id) } else { root + "#" + Paths.slug(operation.id) }
+        references = references.push(Docgen.Reference{uid: uid + "." + operation.id, name: operation.id, fullName: operation.method + " " + operation.path, href: destination, kind: "operation"})
+        if byOperation {
+          let path = folder + "/" + Paths.slug(operation.id) + ".html"
+          let located = Phrase.Scope{..*context, page: path}
+          let body = operationSection(Body{pieces: [], headings: [], links: [], diagnostics: []}, &operation, Paths.slug(operation.id), &located, schemaHref(path))
+          pages = pages.push(Docgen.Page{path: path, source: context.source, kind: "rest", title: if operation.summary.isEmpty() { operation.id } else { operation.summary }, uid: "", summary: summaryOf(operation.description), body: body.pieces.join(""), headings: body.headings, links: body.links, meta: []})
+          problems = problems.concat(body.diagnostics)
+        }
+      }
+    }
+  }
+  if !service.schemas.isEmpty() {
+    overview = section(overview, 2, "schemas", "Schemas")
+    for schema in service.schemas {
+      let id = "schema-" + Paths.slug(schema.name)
+      references = references.push(Docgen.Reference{uid: uid + ".schemas." + schema.name, name: schema.name, fullName: schema.name, href: root + "#" + id, kind: "schema"})
+      overview = schemaSection(overview, &schema, id, context)
+    }
+  }
+  let first = Docgen.Page{path: root, source: context.source, kind: "rest", title: service.title, uid: uid, summary: summaryOf(service.description), body: overview.pieces.join(""), headings: overview.headings, links: overview.links, meta: []}
+  ([first].concat(pages), references, problems.concat(overview.diagnostics))
+}
+
+/// Tags in first-use order, with untagged operations last.
+fn tags(operations: &Array[OpenApi.Operation]) -> Array[Str] {
+  var result: Array[Str] = []
+  var untagged = false
+  for operation in *operations {
+    if operation.tags.isEmpty() { untagged = true }
+    for tag in operation.tags {
+      if !result.contains(tag) { result = result.push(tag) }
+    }
+  }
+  if untagged && !result.contains(UNTAGGED) { result.push(UNTAGGED) } else { result }
+}
+
+/// The first line of a description.
+fn summaryOf(text: Str) -> Str { text.trim().split("\n")[0] }
+
+/// A body with HTML appended.
+fn emit(body: Body, text: Str) -> Body { Body{..body, pieces: body.pieces.push(text)} }
+
+/// A body with a section heading appended and recorded.
+fn section(body: Body, level: Int, id: Str, title: Str) -> Body {
+  let tag = "h" + show(level)
+  let recorded = Body{..body, headings: body.headings.push(Docgen.Heading{id: id, title: title, level: level})}
+  emit(recorded, "<" + tag + " id=\"" + Paths.escape(id) + "\">" + Paths.escape(title) + "<a class=\"anchor\" href=\"#" + Paths.escape(id) + "\" aria-label=\"Link to this section\"></a></" + tag + ">\n")
+}
+
+/// Description text rendered as HTML below the page sections.
+fn documentation(body: Body, text: Str, context: &Phrase.Scope) -> Body {
+  if text.trim().isEmpty() { return body }
+  let rendered = Markdown.fragment(text, context, 2)
+  let recorded = Body{..body, links: body.links.concat(rendered.links), diagnostics: body.diagnostics.concat(rendered.diagnostics)}
+  emit(recorded, "<div class=\"api-doc\">\n" + rendered.html + "</div>\n")
+}
+
+/// A type description with schema names linked to their sections on the page `schemas`
+/// names; the empty text means the current page.
+fn kind(written: Str, schemas: Str) -> Str {
+  var pieces: Array[Str] = []
+  for word in written.split(" ") {
+    let plain = ["array", "of", "or", "and", "any", "object", "string", "integer", "number", "boolean", "null"].contains(word) || word.startsWith("(")
+    pieces = pieces.push(if plain { Paths.escape(word) } else { "<a class=\"xref\" href=\"" + Paths.escape(schemas) + "#schema-" + Paths.escape(Paths.slug(word)) + "\">" + Paths.escape(word) + "</a>" })
+  }
+  pieces.join(" ")
+}
+
+/// One operation with its parameters, body, and responses.
+fn operationSection(body: Body, operation: &OpenApi.Operation, id: Str, context: &Phrase.Scope, schemas: Str) -> Body {
+  let title = if operation.summary.isEmpty() { operation.id } else { operation.summary }
+  var held = emit(body, "<section class=\"rest-operation\">\n")
+  held = section(held, 3, id, title)
+  let deprecated = if operation.deprecated { "<span class=\"badge deprecated\">Deprecated</span>" } else { "" }
+  held = emit(held, "<p class=\"rest-endpoint\"><span class=\"method method-" + operation.method.toLower() + "\">" + operation.method + "</span><code>" + Paths.escape(operation.path) + "</code>" + deprecated + "</p>\n")
+  held = documentation(held, operation.description, context)
+  if !operation.parameters.isEmpty() {
+    held = emit(held, "<h4>Parameters</h4>\n<div class=\"table-wrapper\"><table class=\"api-table\"><thead><tr><th>Name</th><th>In</th><th>Type</th><th>Required</th><th>Description</th></tr></thead><tbody>\n")
+    for parameter in operation.parameters {
+      held = emit(held, "<tr><td><code>" + Paths.escape(parameter.name) + "</code></td><td>" + Paths.escape(parameter.location) + "</td><td>" + kind(parameter.kind, schemas) + "</td><td>" + (if parameter.required { "Yes" } else { "No" }) + "</td><td>" + Paths.escape(parameter.description) + "</td></tr>\n")
+    }
+    held = emit(held, "</tbody></table></div>\n")
+  }
+  if !operation.body.isEmpty() {
+    held = emit(held, "<h4>Request body" + (if operation.bodyRequired { " <span class=\"badge\">Required</span>" } else { "" }) + "</h4>\n<ul class=\"api-list\">\n")
+    for payload in operation.body { held = emit(held, "<li><code>" + Paths.escape(payload.media) + "</code> " + kind(payload.kind, schemas) + "</li>\n") }
+    held = emit(held, "</ul>\n")
+  }
+  if !operation.responses.isEmpty() {
+    held = emit(held, "<h4>Responses</h4>\n<div class=\"table-wrapper\"><table class=\"api-table\"><thead><tr><th>Status</th><th>Description</th><th>Content</th></tr></thead><tbody>\n")
+    for response in operation.responses {
+      let content = response.payloads.map(|payload: OpenApi.Payload| "<code>" + Paths.escape(payload.media) + "</code> " + kind(payload.kind, schemas)).join("<br>")
+      held = emit(held, "<tr><td><span class=\"status status-" + Paths.escape(response.status.take(1)) + "xx\">" + Paths.escape(response.status) + "</span></td><td>" + Paths.escape(response.description) + "</td><td>" + content + "</td></tr>\n")
+    }
+    held = emit(held, "</tbody></table></div>\n")
+  }
+  emit(held, "</section>\n")
+}
+
+/// One schema with its properties or enumerated values.
+fn schemaSection(body: Body, schema: &OpenApi.Schema, id: Str, context: &Phrase.Scope) -> Body {
+  var held = section(body, 3, id, schema.name)
+  held = emit(held, "<p class=\"rest-schema-kind\">" + kind(schema.kind, "") + "</p>\n")
+  held = documentation(held, schema.description, context)
+  if !schema.properties.isEmpty() {
+    held = emit(held, "<div class=\"table-wrapper\"><table class=\"api-table\"><thead><tr><th>Property</th><th>Type</th><th>Required</th><th>Description</th></tr></thead><tbody>\n")
+    for property in schema.properties {
+      held = emit(held, "<tr><td><code>" + Paths.escape(property.name) + "</code></td><td>" + kind(property.kind, "") + "</td><td>" + (if property.required { "Yes" } else { "No" }) + "</td><td>" + Paths.escape(property.description) + "</td></tr>\n")
+    }
+    held = emit(held, "</tbody></table></div>\n")
+  }
+  if !schema.values.isEmpty() {
+    held = emit(held, "<p>Allowed values: " + schema.values.map(|value: Str| "<code>" + Paths.escape(value) + "</code>").join(", ") + "</p>\n")
+  }
+  held
+}

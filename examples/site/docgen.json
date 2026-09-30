@@ -1,0 +1,58 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "files": [
+            "**/*.pudu"
+          ],
+          "src": "src"
+        }
+      ],
+      "dest": "api",
+      "namespaceLayout": "nested",
+      "sourceUrl": "https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/examples/site/src/{path}#L{line}"
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": [
+          "**/*.md",
+          "**/toc.yml",
+          "rest/*.yml"
+        ],
+        "src": "docs"
+      }
+    ],
+    "resource": [
+      {
+        "files": [
+          "images/**"
+        ],
+        "src": "docs"
+      }
+    ],
+    "template": [
+      "default",
+      "template"
+    ],
+    "globalMetadata": {
+      "_appTitle": "Docgen Sample",
+      "_appName": "Docgen Sample",
+      "_appFooter": "Built with pudu-lang-docgen",
+      "_enableSearch": true,
+      "_appLogoPath": "images/logo.png",
+      "_appFaviconPath": "images/logo.png"
+    },
+    "sitemap": {
+      "baseUrl": "https://docs.example.org",
+      "changefreq": "weekly"
+    },
+    "markdownEngineProperties": {
+      "alerts": {
+        "SECURITY": "alert alert-caution"
+      }
+    }
+  }
+}

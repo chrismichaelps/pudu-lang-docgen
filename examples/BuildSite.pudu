@@ -1,0 +1,22 @@
+/** @Example.BuildSite.Program — the sample project built into a static site */
+module BuildSite
+
+import Std.Io as Io
+import PuduLangDocgen.Build as Build
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Docset as Docset
+
+/// Builds `examples/site` into `examples/site/_site` and answers 0, or 1 when it fails.
+fn main() -> Int {
+  match Docset.build("examples/site/docgen.json", &Docset.options(), &Build.extensions()) {
+    case Ok(report) => {
+      for problem in report.diagnostics { let _said = Io.writeLine(Docgen.describe(&problem)) }
+      let _summary = Io.writeLine("written " + show(report.written.length()) + ", unchanged " + show(report.unchanged.length()) + ", removed " + show(report.removed.length()))
+      0
+    }
+    case Err(problems) => {
+      for problem in problems { let _said = Io.writeErrorLine(Docgen.describe(&problem)) }
+      1
+    }
+  }
+}

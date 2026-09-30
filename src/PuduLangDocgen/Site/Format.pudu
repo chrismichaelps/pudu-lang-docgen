@@ -1,0 +1,146 @@
+/** @Docgen.Site.Format — published HTML laid out with two-space indentation */
+module PuduLangDocgen.Site.Format
+
+import Std.Map as Map
+import Std.Set as Set
+
+/** @Docgen.Site.Piece — a tag, text, or verbatim run of an HTML document */
+type Piece = { kind: Str, name: Str, text: Str }
+
+/// Elements laid out on lines of their own.
+const BLOCKS: Set[Str] = setOf([
+    "html", "head", "body", "header", "footer", "main", "nav", "aside", "section", "article", "div", "ul", "ol",
+    "li", "dl", "dt", "dd", "table", "thead", "tbody", "tfoot", "tr", "th", "td", "caption", "colgroup", "col",
+    "h1", "h2", "h3", "h4", "h5", "h6", "p", "figure", "figcaption", "details", "summary", "blockquote", "form",
+    "fieldset", "meta", "link", "title", "hr", "noscript", "iframe", "video", "audio", "source", "picture", "urlset",
+    "url", "loc", "lastmod", "changefreq", "priority", "base"
+  ])
+
+/// Elements whose content is copied exactly.
+const VERBATIM: Set[Str] = setOf(["pre", "script", "style", "textarea"])
+
+/// Elements that never have content.
+const VOID: Set[Str] = setOf(["area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr"])
+
+/// Indentation added per nesting level.
+const INDENT: Str = "  "
+
+/// HTML with block elements on their own lines indented two spaces per level. Text, inline
+/// markup, and the content of `pre`, `script`, `style`, and `textarea` keep their exact form.
+export fn html(document: Str) -> Str {
+  let pieces = split(document)
+  var closes: Map[Int, Int] = mapOf([])
+  var containsBlocks: Set[Int] = setOf([])
+  var stack: Array[Int] = []
+  for index in 0..pieces.length() {
+    let piece = pieces[index]
+    let block = Set.contains(&BLOCKS, piece.name)
+    if piece.kind == "raw" || piece.kind == "doctype" || (piece.kind == "open" && block) {
+      for held in stack { containsBlocks = Set.insert(&containsBlocks, held) }
+    }
+    if piece.kind == "open" && block && !Set.contains(&VOID, piece.name) {
+      stack = stack.push(index)
+    } else if piece.kind == "close" && block {
+      var depth = stack.length() - 1
+      while depth >= 0 && pieces[stack[depth]].name != piece.name { depth = depth - 1 }
+      if depth >= 0 {
+        closes = Map.insert(&closes, stack[depth], index)
+        stack = stack.slice(0, depth)
+      }
+    }
+  }
+  var lines: Array[Str] = []
+  var current: Array[Str] = []
+  var level = 0
+  var index = 0
+  while index < pieces.length() {
+    let piece = pieces[index]
+    let block = Set.contains(&BLOCKS, piece.name) && (piece.kind == "open" || piece.kind == "close")
+    if piece.kind == "doctype" || piece.kind == "comment" || piece.kind == "raw" || block {
+      lines = flush(lines, &current, level)
+      current = []
+    }
+    if piece.kind == "open" && block && !Set.contains(&VOID, piece.name) && Map.containsKey(&closes, index) && !Set.contains(&containsBlocks, index) {
+      var whole: Array[Str] = []
+      let end = Map.getOr(&closes, index, index)
+      for position in index..(end + 1) { whole = whole.push(pieces[position].text) }
+      lines = lines.push(indent(level) + whole.join("").trim())
+      index = end + 1
+      continue
+    }
+    if piece.kind == "close" && block { level = if level > 0 { level - 1 } else { 0 } }
+    if piece.kind == "doctype" || piece.kind == "comment" || piece.kind == "raw" || block {
+      lines = lines.push(indent(level) + piece.text)
+      if piece.kind == "open" && block && !Set.contains(&VOID, piece.name) && Map.containsKey(&closes, index) { level = level + 1 }
+    } else { current = current.push(piece.text) }
+    index = index + 1
+  }
+  lines = flush(lines, &current, level)
+  lines.join("\n") + "\n"
+}
+
+/// Lines with pending inline content added, each source line indented to the level; line
+/// breaks between inline content carry no meaning outside verbatim elements.
+fn flush(lines: Array[Str], current: &Array[Str], level: Int) -> Array[Str] {
+  var result = lines
+  for line in current.join("").split("\n") {
+    let text = line.trim()
+    if !text.isEmpty() { result = result.push(indent(level) + text) }
+  }
+  result
+}
+
+/// Indentation for a nesting level.
+fn indent(level: Int) -> Str {
+  var pieces: Array[Str] = []
+  for _step in 0..level { pieces = pieces.push(INDENT) }
+  pieces.join("")
+}
+
+/// A document split into tags, text, comments, and verbatim elements.
+fn split(document: Str) -> Array[Piece] {
+  var pieces: Array[Piece] = []
+  var rest = document
+  while !rest.isEmpty() {
+    let open = rest.indexOf("<")
+    if open != 0 {
+      let text = if open < 0 { rest } else { rest.take(open) }
+      pieces = pieces.push(Piece{kind: "text", name: "", text: text})
+      rest = rest.drop(text.length())
+      continue
+    }
+    if rest.startsWith("<!--") {
+      let end = rest.indexOf("-->")
+      let length = if end < 0 { rest.length() } else { end + 3 }
+      pieces = pieces.push(Piece{kind: "comment", name: "", text: rest.take(length)})
+      rest = rest.drop(length)
+      continue
+    }
+    let close = rest.indexOf(">")
+    if close < 0 {
+      pieces = pieces.push(Piece{kind: "text", name: "", text: rest})
+      break
+    }
+    let tag = rest.take(close + 1)
+    let closing = tag.startsWith("</")
+    let body = if closing { tag.drop(2) } else { tag.drop(1) }
+    var nameEnd = 0
+    let cs = body.chars()
+    while nameEnd < cs.length() && cs[nameEnd] != ' ' && cs[nameEnd] != '>' && cs[nameEnd] != '/' && cs[nameEnd] != '\n' { nameEnd = nameEnd + 1 }
+    let name = body.take(nameEnd).toLower()
+    if tag.startsWith("<!") || tag.startsWith("<?") {
+      pieces = pieces.push(Piece{kind: "doctype", name: "", text: tag})
+      rest = rest.drop(tag.length())
+    } else if !closing && Set.contains(&VERBATIM, name) {
+      let ending = "</" + name
+      let found = rest.toLower().indexOf(ending)
+      let end = if found < 0 { rest.length() } else { found + rest.drop(found).indexOf(">") + 1 }
+      pieces = pieces.push(Piece{kind: "raw", name: name, text: rest.take(end)})
+      rest = rest.drop(end)
+    } else {
+      pieces = pieces.push(Piece{kind: if closing { "close" } else { "open" }, name: name, text: tag})
+      rest = rest.drop(tag.length())
+    }
+  }
+  pieces
+}

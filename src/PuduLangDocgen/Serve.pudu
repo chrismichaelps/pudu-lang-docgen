@@ -1,0 +1,177 @@
+/** @Docgen.Serve.Seam — a local preview server for a published site folder */
+module PuduLangDocgen.Serve
+
+import Std.Bytes as Bytes
+import Std.Char as Char
+import Std.Concurrent as Concurrent
+import Std.Fs as Fs
+import Std.Io as Io
+import Std.Mime as Mime
+import Std.Net as Net
+import Std.Path as Path
+import Std.Signal as Signal
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Serve.Reply — a response: its status, media type, and body */
+export type Reply = { status: Int, media: Str, body: Bytes }
+
+/// Largest request head read before the request is refused.
+const HEAD_LIMIT: Int = 65536
+
+/// Milliseconds between checks for an interrupt while serving.
+const SIGNAL_MILLIS: Int = 50
+
+/// Media type of the server's own plain-text replies.
+const PLAIN: Str = "text/plain; charset=utf-8"
+
+/// Reason phrases of the statuses the server answers with.
+const REASONS: Array[(Int, Str)] = [(200, "OK"), (400, "Bad Request"), (404, "Not Found"), (405, "Method Not Allowed"), (500, "Internal Server Error")]
+
+/// The site-relative file a request path names: folders name their `index.html`, and paths
+/// that are not portable after percent-decoding name nothing.
+export fn target(path: Str) -> Option[Str] {
+  let decoded = decode(path.split("?")[0].split("#")[0]) ?
+  let trimmed = if decoded.startsWith("/") { decoded.drop(1) } else { decoded }
+  let named = if trimmed.isEmpty() || trimmed.endsWith("/") { trimmed + "index.html" } else { trimmed }
+  if Paths.relative(named) { Some(named) } else { None }
+}
+
+/// A request path with `%XX` escapes decoded as UTF-8, or none when an escape is malformed.
+export fn decode(path: Str) -> Option[Str] {
+  let cs = path.chars()
+  var hex: Array[Str] = []
+  var pieces: Array[Str] = []
+  var index = 0
+  while index < cs.length() {
+    if cs[index] == '%' {
+      if index + 2 >= cs.length() || !Char.isHexDigit(cs[index + 1]) || !Char.isHexDigit(cs[index + 2]) { return None }
+      hex = hex.push(cs[index + 1].toText() + cs[index + 2].toText())
+      index = index + 3
+    } else {
+      if !hex.isEmpty() {
+        pieces = pieces.push(textOf(hex.join("")) ?)
+        hex = []
+      }
+      pieces = pieces.push(cs[index].toText())
+      index = index + 1
+    }
+  }
+  if !hex.isEmpty() { pieces = pieces.push(textOf(hex.join("")) ?) }
+  Some(pieces.join(""))
+}
+
+/// Serves a folder until interrupted, answering how many requests were served.
+export fn serve(root: Str, host: Str, port: Int) -> Result[Int, Str] {
+  let listener = match Net.listen(host, port) {
+    case Ok(found) => found
+    case Err(problem) => { return Err(show(problem)) }
+  }
+  let actual = match Net.portOf(&listener) {
+    case Ok(found) => found
+    case Err(_) => port
+  }
+  let _said = Io.writeLine("Serving " + root + " at http://" + (if host == "0.0.0.0" { "localhost" } else { host }) + ":" + show(actual) + "/ (press Ctrl+C to stop)")
+  if Signal.listen() {
+    let held = listener
+    let _watcher = Concurrent.start(fn() -> () {
+        while !Signal.requested() { let _paused = Concurrent.sleep(SIGNAL_MILLIS) }
+        let _closed = Net.closeListener(&held)
+      })
+  }
+  match Net.serve(&listener, 0, fn(connection: Net.Connection) -> Bool {
+      respond(root, &connection)
+      true
+    }) {
+    case Ok(count) => Ok(count)
+    case Err(problem) => if Signal.requested() { Ok(0) } else { Err(show(problem)) }
+  }
+}
+
+/// The reply to a request line: files and folder indexes for `GET` and `HEAD`, the site's
+/// not-found page for missing files, and plain refusals for malformed or other requests. A
+/// `HEAD` reply keeps its body so the head reports its length; only the body is not sent.
+export fn reply(root: Str, line: Str) -> Reply {
+  let parts = line.split(" ")
+  if parts.length() != 3 || !parts[2].startsWith("HTTP/") { return Reply{status: 400, media: PLAIN, body: Bytes.fromText("Bad request")} }
+  if parts[0] != "GET" && parts[0] != "HEAD" { return Reply{status: 405, media: PLAIN, body: Bytes.fromText("Only GET and HEAD are served")} }
+  answer(root, parts[1])
+}
+
+/// The reply for a request path: the file, a folder's index, or the site's not-found page.
+export fn answer(root: Str, path: Str) -> Reply {
+  match target(path) {
+    case Some(wanted) => {
+      match readable(root, wanted) {
+        case Some(found) => { return file(found, wanted, 200) }
+        case None => {
+          match readable(root, wanted + "/index.html") {
+            case Some(found) => { return file(found, "index.html", 200) }
+            case None => {}
+          }
+        }
+      }
+    }
+    case None => {}
+  }
+  match readable(root, "404.html") {
+    case Some(found) => file(found, "404.html", 404)
+    case None => Reply{status: 404, media: PLAIN, body: Bytes.fromText("Not found")}
+  }
+}
+
+/// The response head of a reply.
+export fn head(answered: &Reply) -> Str {
+  var reason = "OK"
+  for (code, phrase) in REASONS {
+    if code == answered.status { reason = phrase }
+  }
+  "HTTP/1.1 " + show(answered.status) + " " + reason + "\r\nContent-Type: " + answered.media + "\r\nContent-Length: " + show(answered.body.length()) + "\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n"
+}
+
+/// One request read from a connection and answered; the connection closes afterwards.
+fn respond(root: Str, connection: &Net.Connection) -> () {
+  let line = match Net.receiveUntil(connection, &Bytes.fromText("\r\n\r\n"), HEAD_LIMIT) {
+    case Ok((received, _rest)) => match Bytes.toText(&received) {
+      case Ok(text) => text.split("\r\n")[0]
+      case Err(_) => ""
+    }
+    case Err(_) => ""
+  }
+  let answered = reply(root, line)
+  let written = Bytes.fromText(head(&answered))
+  let _sent = Net.send(connection, &(if line.startsWith("HEAD ") { written } else { written.concat(&answered.body) }))
+}
+
+/// The physical path of a regular file inside the root.
+fn readable(root: Str, relative: Str) -> Option[Str] {
+  match Fs.resolveInside(root, relative) {
+    case Ok(physical) => match Fs.metadata(physical) {
+      case Ok(details) => if details.isDirectory || details.isSymbolicLink { None } else { Some(physical) }
+      case Err(_) => None
+    }
+    case Err(_) => None
+  }
+}
+
+/// A file's bytes with the media type its extension names.
+fn file(physical: Str, name: Str, status: Int) -> Reply {
+  let extension = match Path.extensionOf(name) {
+    case Some(found) => found
+    case None => ""
+  }
+  match Io.readAllBytes(physical) {
+    case Ok(held) => Reply{status: status, media: Mime.fromExtension(extension), body: held}
+    case Err(reason) => Reply{status: 500, media: PLAIN, body: Bytes.fromText(show(reason))}
+  }
+}
+
+/// UTF-8 text of hexadecimal byte pairs.
+fn textOf(hex: Str) -> Option[Str] {
+  match Bytes.decodeHex(hex) {
+    case Ok(held) => match Bytes.toText(&held) {
+      case Ok(found) => Some(found)
+      case Err(_) => None
+    }
+    case Err(_) => None
+  }
+}

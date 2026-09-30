@@ -2,8 +2,13 @@ fmcf.md
 lang_proposal.md
 goal.md
 deps/
-pudu.lock
 _site/
 .cache/
 *.bundle
 .DS_Store
+.docgen/
+examples/site/_site/
+.claude/
+
+website/_site/
+website/.vercel/

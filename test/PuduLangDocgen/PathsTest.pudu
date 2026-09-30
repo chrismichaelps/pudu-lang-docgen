@@ -1,0 +1,36 @@
+/** @Docgen.Paths.Tests — publication boundaries and destination escaping remain observable */
+module PuduLangDocgen.PathsTest
+
+import Std.Io as Io
+import Std.Test as Test
+import PuduLangDocgen.Paths as Paths
+
+/// Runs every output path, destination, fragment, and escaping contract.
+fn main() -> Int {
+  let checks = Test.suite("Paths", &[
+      Test.that("portable relative paths", Paths.relative("articles/hello-world.html")),
+      Test.that("unicode path", Paths.relative("guide/été.md")),
+      Test.that("invalid publication paths", ["", "/root", "../root", "a/../b", "a/./b", "a//b", "a/", "C:/file", "a\\b", "a%2fb", "a?b", "a#b", "a\n", "CON.txt", "a/lpt9", "a.", "a ", "<a>"].filter(|value: Str| Paths.relative(value)).isEmpty()),
+      Test.that("safe browser destinations", ["https://example.org/a?q=1#b", "http://localhost:8080/", "mailto:a@example.org", "../other.md", "#section", "?lang=en", "a.md?x=1#h"].filter(|value: Str| !Paths.href(value)).isEmpty()),
+      Test.that("unsafe browser destinations", ["", "javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,hi", "//example.org", " https://example.org", "a\n", "a\\b", "https://", "https:///host", "https://user@host"].filter(|value: Str| Paths.href(value)).isEmpty()),
+      Test.equals("slug separators collapse", &Paths.slug(" Hello,   World! "), &"hello-world"),
+      Test.equals("slug unicode preserved", &Paths.slug("Été 中文"), &"été-中文"),
+      Test.equals("empty slug fallback", &Paths.slug("---"), &"section"),
+      Test.equals("article suffix mapping", &[Paths.output("a.md"), Paths.output("a.MARKDOWN"), Paths.output("a.png")], &["a.html", "a.html", "a.png"]),
+      Test.equals("relative resolution and query", &Paths.resolve("guide/start.md", "../api.md?x=1#hello"), &Ok("api.html?x=1#hello")),
+      Test.equals("same page fragments", &Paths.resolve("guide/start.md", "#hello"), &Ok("guide/start.html#hello")),
+      Test.equals("same page queries", &Paths.resolve("guide/start.md", "?lang=en#hello"), &Ok("guide/start.html?lang=en#hello")),
+      Test.equals("external stays external", &Paths.resolve("index.md", "https://example.org/a"), &Ok("https://example.org/a")),
+      Test.equals("root escape is refused", &Paths.resolve("index.md", "../secret.md"), &Err("destination escapes docset root")),
+      Test.equals("encoded local path refused", &Paths.resolve("index.md", "%2e%2e/secret.md"), &Err("encoded local path is not supported")),
+      Test.equals("unsafe source refused", &Paths.resolve("../index.md", "a.md"), &Err("invalid source path")),
+      Test.equals("unsafe destination refused", &Paths.resolve("index.md", "javascript:run"), &Err("unsafe destination")),
+      Test.equals("dot segments resolve", &Paths.resolve("guide/start.md", "./next.md"), &Ok("guide/next.html")),
+      Test.equals("empty destination segment refused", &Paths.resolve("index.md", "a//b.md"), &Err("empty destination segment")),
+      Test.equals("invalid local output refused", &Paths.resolve("index.md", "a|b.md"), &Err("invalid local destination")),
+      Test.equals("html escaping exact", &Paths.escape("<&\"'>"), &"&lt;&amp;&quot;&#39;&gt;")
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

@@ -1,0 +1,80 @@
+/** @Docgen.Api.Signature — declarations shown with keywords marked and types linked */
+module PuduLangDocgen.Api.Signature
+
+import Std.Map as Map
+import Std.Text as Text
+import PuduLangDocgen.Api.Lexer as Lexer
+import PuduLangDocgen.Api.Model as Model
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Paths as Paths
+
+/// Words marked as keywords inside declarations.
+const KEYWORDS: Array[Str] = ["fn", "async", "type", "trait", "impl", "const", "for", "export", "module", "self", "Self"]
+
+/// The identity a written type name refers to inside a module, or the empty text.
+/// `Alias.Name` resolves through the module's imports; a bare name resolves inside the
+/// module first and then as a full identity.
+export fn resolve(unit: &Model.Unit, written: Str, references: &Map[Str, Docgen.Reference]) -> Str {
+  let parts = written.split(".")
+  if parts.length() >= 2 {
+    let alias = parts[0]
+    for (name, imported) in unit.imports {
+      if name == alias {
+        let uid = imported + "." + parts.slice(1, parts.length()).join(".")
+        if Map.containsKey(references, uid) { return uid }
+      }
+    }
+  }
+  let local = unit.uid + "." + written
+  if Map.containsKey(references, local) { return local }
+  if Map.containsKey(references, written) { return written }
+  ""
+}
+
+/// Declaration HTML for a page: keywords marked, resolvable names linked, the rest escaped.
+/// Line breaks and leading indentation of the declaration are kept.
+export fn html(unit: &Model.Unit, signature: Str, references: &Map[Str, Docgen.Reference], page: Str) -> Str {
+  signature.split("\n").map(fn(line: Str) -> Str {
+      let depth = line.length() - Text.trimStart(line).length()
+      line.take(depth) + lineHtml(unit, line, references, page)
+    }).join("\n")
+}
+
+/// One declaration line as HTML.
+fn lineHtml(unit: &Model.Unit, signature: Str, references: &Map[Str, Docgen.Reference], page: Str) -> Str {
+  let tokens = Lexer.tokens(signature)
+  var pieces: Array[Str] = []
+  var index = 0
+  var previous = ""
+  while index < tokens.length() {
+    let token = tokens[index]
+    var end = index + 1
+    var written = token.text
+    if token.kind == Lexer.Word {
+      while end + 1 < tokens.length() && tokens[end].text == "." && tokens[end + 1].kind == Lexer.Word {
+        written = written + "." + tokens[end + 1].text
+        end = end + 2
+      }
+    }
+    let spaced = !pieces.isEmpty() && ![")", "]", ",", ":", ".", "?"].contains(token.text) && !["(", "[", ".", "&", "*", "!"].contains(previous) && !((token.text == "(" || token.text == "[") && !["->", "=", "|", ",", ":"].contains(previous))
+    if spaced { pieces = pieces.push(" ") }
+    let uid = if token.kind == Lexer.Word && !KEYWORDS.contains(written) { resolve(unit, written, references) } else { "" }
+    if !uid.isEmpty() {
+      let reference = Map.get(references, uid)
+      let href = match reference {
+        case Some(found) => if Paths.remote(found.href) { found.href } else { Paths.between(page, found.href) }
+        case None => ""
+      }
+      pieces = pieces.push("<a class=\"xref\" href=\"" + Paths.escape(href) + "\">" + Paths.escape(written) + "</a>")
+    } else if token.kind == Lexer.Word && KEYWORDS.contains(written) {
+      pieces = pieces.push("<span class=\"hl-k\">" + written + "</span>")
+    } else if token.kind == Lexer.Literal {
+      pieces = pieces.push("<span class=\"hl-s\">" + Paths.escape(written) + "</span>")
+    } else {
+      pieces = pieces.push(Paths.escape(written))
+    }
+    previous = tokens[end - 1].text
+    index = end
+  }
+  pieces.join("")
+}

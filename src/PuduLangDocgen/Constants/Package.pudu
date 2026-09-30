@@ -1,0 +1,18 @@
+/** @Docgen.Constants.Package — the identity this package reports about itself */
+module PuduLangDocgen.Constants.Package
+
+/// The package name shown in generated files and command output.
+export const NAME: Str = "pudu-lang-docgen"
+
+/// The package version recorded in every manifest.
+export const VERSION: Str = "0.1.0"
+
+/// The configuration file a project folder is expected to hold.
+export const CONFIG_FILE: Str = "docgen.json"
+
+/// The folder beside the configuration holding build state between runs.
+export const STATE_FOLDER: Str = ".docgen"
+
+/// Template names built into the package: the default look, its static-navigation alias, and
+/// the extensions that split HTTP API pages by tag or by operation.
+export const BUILT_IN_TEMPLATES: Array[Str] = ["default", "modern", "statictoc", "rest.tagpage", "rest.operationpage"]

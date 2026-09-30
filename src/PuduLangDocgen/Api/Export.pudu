@@ -1,0 +1,130 @@
+/** @Docgen.Api.Export — extracted declarations written as model, Markdown, or API page files */
+module PuduLangDocgen.Api.Export
+
+import Std.Json as Json
+import PuduLangDocgen.Api.Catalog as Catalog
+import PuduLangDocgen.Api.Model as Model
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Yaml as Yaml
+
+/// First line of every API page document.
+const API_PAGE: Str = "#YamlMime:ApiPage\n"
+
+/// Formats metadata may be written in.
+export const FORMATS: Array[Str] = ["json", "markdown", "apiPage"]
+
+/// Files for selected modules in a format, with paths relative to the metadata folder and a
+/// `toc.yml` listing modules and their types.
+export fn files(units: &Array[Model.Unit], format: Str) -> Array[(Str, Str)] {
+  var result: Array[(Str, Str)] = []
+  let extension = if format == "markdown" { ".md" } else if format == "apiPage" { ".yml" } else { ".json" }
+  for unit in *units {
+    if format == "json" { result = result.push((unit.uid + ".json", Json.encodePretty(&unitJson(&unit)))) }
+      else {
+      result = result.push((unit.uid + extension, if format == "markdown" { moduleMarkdown(&unit) } else { API_PAGE + Yaml.encode(&modulePage(&unit)) }))
+      for member in unit.members {
+        if Model.isType(member.kind) { result = result.push((member.uid + extension, if format == "markdown" { typeMarkdown(&unit, &member) } else { API_PAGE + Yaml.encode(&typePage(&unit, &member)) })) }
+      }
+    }
+  }
+  let options = Catalog.Options{..Catalog.defaults(), dest: ""}
+  let toc = Catalog.toc(units, &options).map(fn(item: Docgen.TocItem) -> Docgen.Meta {
+      let children = item.children.map(|child: Docgen.TocItem| Docgen.Fields([("name", Docgen.Text(child.title)), ("href", Docgen.Text(child.href.replace(".html", extension)))]))
+      Docgen.Fields([("name", Docgen.Text(item.title)), ("href", Docgen.Text(item.href.replace(".html", extension))), ("items", Docgen.Items(children))])
+    })
+  result.push(("toc.yml", Yaml.encode(&Docgen.Items(toc))))
+}
+
+/// A module's full model as JSON.
+fn unitJson(unit: &Model.Unit) -> Json.Json {
+  Json.object(&[
+      ("uid", Json.Text(unit.uid)), ("path", Json.Text(unit.path)), ("line", Json.Number(unit.line)), ("doc", Json.Text(unit.doc)),
+      ("imports", Json.list(&unit.imports.map(fn(entry: (Str, Str)) -> Json.Json {
+              let (alias, name) = entry
+              Json.object(&[("alias", Json.Text(alias)), ("module", Json.Text(name))])
+            }))),
+      ("members", Json.list(&unit.members.map(|member: Model.Member| memberJson(&member)))),
+      ("implementations", Json.list(&unit.implementations.map(|held: Model.Implementation| Json.object(&[("trait", Json.Text(held.contract)), ("target", Json.Text(held.target)), ("line", Json.Number(held.line)), ("methods", Json.list(&held.methods.map(|method: Model.Member| memberJson(&method))))]))))
+    ])
+}
+
+/// One declaration and its nested members as JSON.
+fn memberJson(member: &Model.Member) -> Json.Json {
+  Json.object(&[
+      ("uid", Json.Text(member.uid)), ("name", Json.Text(member.name)), ("kind", Json.Text(member.kind)), ("signature", Json.Text(member.signature)),
+      ("doc", Json.Text(member.doc)), ("line", Json.Number(member.line)), ("exported", Json.Boolean(member.exported)),
+      ("parameters", Json.list(&member.parameters.map(|parameter: Model.Parameter| Json.object(&[("name", Json.Text(parameter.name)), ("type", Json.Text(parameter.kind))])))),
+      ("returns", Json.Text(member.returns)), ("members", Json.list(&member.members.map(|inner: Model.Member| memberJson(&inner))))
+    ])
+}
+
+/// A module page in Markdown with declarations as sections.
+fn moduleMarkdown(unit: &Model.Unit) -> Str {
+  var lines = ["---", "uid: " + Yaml.scalar(unit.uid), "title: " + Yaml.scalar(unit.uid), "---", "", "# " + unit.uid, ""]
+  if !unit.doc.isEmpty() { lines = lines.push(unit.doc).push("") }
+  for member in unit.members {
+    if Model.isType(member.kind) {
+      let summary = Model.summary(member.doc)
+      lines = lines.push("- <xref:" + member.uid + ">" + (if summary.isEmpty() { "" } else { ": " + summary }))
+    }
+  }
+  for member in unit.members {
+    if !Model.isType(member.kind) {
+      lines = lines.concat(["", "## " + member.name + " \{#" + member.name + "\}", "", "```pudu", member.signature, "```", ""])
+      if !member.doc.isEmpty() { lines = lines.push(member.doc) }
+    }
+  }
+  lines.join("\n") + "\n"
+}
+
+/// A type page in Markdown with fields, variants, or methods as a table or sections.
+fn typeMarkdown(unit: &Model.Unit, member: &Model.Member) -> Str {
+  var lines = ["---", "uid: " + Yaml.scalar(member.uid), "title: " + Yaml.scalar(member.name), "---", "", "# " + member.name, "", "Module <xref:" + unit.uid + ">", "", "```pudu", member.signature, "```", ""]
+  if !member.doc.isEmpty() { lines = lines.push(member.doc).push("") }
+  if member.kind == "trait" {
+    for method in member.members { lines = lines.concat(["## " + method.name + " \{#" + method.name + "\}", "", "```pudu", method.signature, "```", "", method.doc, ""]) }
+  } else if !member.members.isEmpty() {
+    lines = lines.concat(["| Name | Type | Description |", "| --- | --- | --- |"])
+    for inner in member.members { lines = lines.push("| `" + inner.name + "` | `" + inner.returns.replace("|", "\\|") + "` | " + Model.summary(inner.doc).replace("|", "\\|") + " |") }
+  }
+  lines.join("\n") + "\n"
+}
+
+/// A module as an API page document.
+fn modulePage(unit: &Model.Unit) -> Docgen.Meta {
+  var body = [Docgen.Fields([("h1", Docgen.Text(unit.uid))])]
+  if !unit.doc.isEmpty() { body = body.push(Docgen.Fields([("markdown", Docgen.Text(unit.doc))])) }
+  let types = unit.members.filter(|member: Model.Member| Model.isType(member.kind))
+  if !types.isEmpty() {
+    body = body.push(Docgen.Fields([("h2", Docgen.Text("Types"))]))
+    body = body.push(Docgen.Fields([("list", Docgen.Items(types.map(|member: Model.Member| Docgen.Fields([("text", Docgen.Text(member.name)), ("url", Docgen.Text(member.uid + ".html"))]))))]))
+  }
+  for member in unit.members {
+    if !Model.isType(member.kind) { body = body.concat(declaration(member, 3)) }
+  }
+  Docgen.Fields([("title", Docgen.Text(unit.uid)), ("languageId", Docgen.Text("pudu")), ("body", Docgen.Items(body))])
+}
+
+/// A type as an API page document.
+fn typePage(unit: &Model.Unit, member: &Model.Member) -> Docgen.Meta {
+  var body = [Docgen.Fields([("h1", Docgen.Text(member.name))]), Docgen.Fields([("facts", Docgen.Items([Docgen.Fields([("name", Docgen.Text("Module")), ("value", Docgen.Fields([("text", Docgen.Text(unit.uid)), ("url", Docgen.Text(unit.uid + ".html"))]))])]))]), Docgen.Fields([("code", Docgen.Text(member.signature))])]
+  if !member.doc.isEmpty() { body = body.push(Docgen.Fields([("markdown", Docgen.Text(member.doc))])) }
+  if !member.members.isEmpty() {
+    body = body.push(Docgen.Fields([("h2", Docgen.Text(if member.kind == "trait" { "Methods" } else if member.kind == "union" { "Variants" } else { "Fields" }))]))
+    if member.kind == "trait" {
+      for method in member.members { body = body.concat(declaration(method, 3)) }
+    } else {
+      body = body.push(Docgen.Fields([("parameters", Docgen.Items(member.members.map(|inner: Model.Member| Docgen.Fields([("name", Docgen.Text(inner.name)), ("type", Docgen.Text(inner.returns)), ("description", Docgen.Text(inner.doc))]))))]))
+    }
+  }
+  Docgen.Fields([("title", Docgen.Text(member.name)), ("languageId", Docgen.Text("pudu")), ("body", Docgen.Items(body))])
+}
+
+/// API page blocks documenting one function, method, or constant.
+fn declaration(member: Model.Member, level: Int) -> Array[Docgen.Meta] {
+  var blocks = [Docgen.Fields([("api" + show(level), Docgen.Text(member.name)), ("id", Docgen.Text(member.name))]), Docgen.Fields([("code", Docgen.Text(member.signature))])]
+  if !member.doc.isEmpty() { blocks = blocks.push(Docgen.Fields([("markdown", Docgen.Text(member.doc))])) }
+  let shown = member.parameters.filter(|parameter: Model.Parameter| parameter.name != "self")
+  if !shown.isEmpty() { blocks = blocks.push(Docgen.Fields([("parameters", Docgen.Items(shown.map(|parameter: Model.Parameter| Docgen.Fields([("name", Docgen.Text(parameter.name)), ("type", Docgen.Text(parameter.kind))]))))])) }
+  blocks
+}

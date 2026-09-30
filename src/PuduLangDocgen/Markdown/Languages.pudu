@@ -1,0 +1,34 @@
+/** @Docgen.Markdown.Languages — language identities, aliases, extensions, and display names */
+module PuduLangDocgen.Markdown.Languages
+
+import Std.Option as Option
+import PuduLangDocgen.Markdown.Languages.Extensions as Extensions
+import PuduLangDocgen.Markdown.Languages.Files as Files
+import PuduLangDocgen.Markdown.Languages.Names as Names
+import PuduLangDocgen.Markdown.Languages.Titles as Titles
+
+/// The identity of a language named by its name or an alias in any case, such as `js` or
+/// `JavaScript` for `javascript`. Unknown names answer themselves in lower case.
+/// Identities follow the language table published by the linguist project, with Pudu added.
+export fn identify(written: Str) -> Str {
+  let lowered = written.trim().toLower()
+  Option.unwrapOr(Names.lookup(lowered), lowered)
+}
+
+/// The identity of the language a file is written in, from its exact name or its extension,
+/// or the empty text.
+export fn ofPath(path: Str) -> Str {
+  let parts = path.split("/")
+  let name = parts[parts.length() - 1]
+  match Files.lookup(name) {
+    case Some(found) => found
+    case None => {
+      let pieces = name.split(".")
+      if pieces.length() < 2 { "" } else { Option.unwrapOr(Extensions.lookup(pieces[pieces.length() - 1].toLower()), "") }
+    }
+  }
+}
+
+/// The display name of a language identity, such as `JavaScript`; unknown identities answer
+/// themselves.
+export fn title(identity: Str) -> Str { Option.unwrapOr(Titles.lookup(identity), identity) }

@@ -1,0 +1,368 @@
+/** @Docgen.Api.ExportTests — extracted declarations round out as model, Markdown, and API pages */
+module PuduLangDocgen.ApiExportTest
+
+import Std.Io as Io
+import Std.Json as Json
+import Std.Test as Test
+import PuduLangDocgen.Api.Export as Export
+import PuduLangDocgen.Api.Model as Model
+import PuduLangDocgen.Api.Parser as Parser
+
+/// A module with a documented record, an undocumented union, a trait, a function, and a constant.
+const SOURCE: Str = "/** @M.Module — mod doc */\nmodule M\n\n/// A rec.\nexport type R = \{\n  /// Field a.\n  a: Int\n\}\n\nexport type U = A | B\n\n/// Tr.\nexport trait T \{\n  /// Go.\n  fn go(self: &Self, n: Int) -> Int\n\}\n\n/// Adds.\nexport fn add(a: Int) -> Int \{ a \}\n\nexport const K: Int = 1\n"
+
+/// A module without documentation holding one empty record.
+const BARE: Str = "module N\n\nexport type E = \{\}\n"
+
+/// Both modules as parsed.
+fn units() -> Array[Model.Unit] { [Parser.parse("src/M.pudu", SOURCE), Parser.parse("src/N.pudu", BARE)] }
+
+/// The text written at a path in a format, or a marker when nothing is.
+fn written(format: Str, path: Str) -> Str {
+  for (found, text) in Export.files(&units(), format) {
+    if found == path { return text }
+  }
+  "missing " + path
+}
+
+/// Expected markdown output for `M.md`.
+fn expectedMarkdownMMd() -> Str {
+  [
+    "---",
+    "uid: M",
+    "title: M",
+    "---",
+    "",
+    "# M",
+    "",
+    "Mod doc",
+    "",
+    "- <xref:M.R>: A rec.",
+    "- <xref:M.U>",
+    "- <xref:M.T>: Tr.",
+    "",
+    "## add \{#add\}",
+    "",
+    "```pudu",
+    "fn add(a: Int) -> Int",
+    "```",
+    "",
+    "Adds.",
+    "",
+    "## K \{#K\}",
+    "",
+    "```pudu",
+    "const K: Int = 1",
+    "```",
+    "",
+    ""
+  ].join("\n")
+}
+
+/// Expected markdown output for `M.R.md`.
+fn expectedMarkdownMRMd() -> Str {
+  [
+    "---",
+    "uid: M.R",
+    "title: R",
+    "---",
+    "",
+    "# R",
+    "",
+    "Module <xref:M>",
+    "",
+    "```pudu",
+    "type R = \{ a: Int \}",
+    "```",
+    "",
+    "A rec.",
+    "",
+    "| Name | Type | Description |",
+    "| --- | --- | --- |",
+    "| `a` | `Int` | Field a. |",
+    ""
+  ].join("\n")
+}
+
+/// Expected markdown output for `M.U.md`.
+fn expectedMarkdownMUMd() -> Str {
+  [
+    "---",
+    "uid: M.U",
+    "title: U",
+    "---",
+    "",
+    "# U",
+    "",
+    "Module <xref:M>",
+    "",
+    "```pudu",
+    "type U = A | B",
+    "```",
+    "",
+    "| Name | Type | Description |",
+    "| --- | --- | --- |",
+    "| `A` | `` |  |",
+    "| `B` | `` |  |",
+    ""
+  ].join("\n")
+}
+
+/// Expected markdown output for `M.T.md`.
+fn expectedMarkdownMTMd() -> Str {
+  [
+    "---",
+    "uid: M.T",
+    "title: T",
+    "---",
+    "",
+    "# T",
+    "",
+    "Module <xref:M>",
+    "",
+    "```pudu",
+    "trait T",
+    "```",
+    "",
+    "Tr.",
+    "",
+    "## go \{#go\}",
+    "",
+    "```pudu",
+    "fn go(self: &Self, n: Int) -> Int",
+    "```",
+    "",
+    "Go.",
+    "",
+    ""
+  ].join("\n")
+}
+
+/// Expected markdown output for `N.md`.
+fn expectedMarkdownNMd() -> Str {
+  [
+    "---",
+    "uid: N",
+    "title: N",
+    "---",
+    "",
+    "# N",
+    "",
+    "- <xref:N.E>",
+    ""
+  ].join("\n")
+}
+
+/// Expected markdown output for `N.E.md`.
+fn expectedMarkdownNEMd() -> Str {
+  [
+    "---",
+    "uid: N.E",
+    "title: E",
+    "---",
+    "",
+    "# E",
+    "",
+    "Module <xref:N>",
+    "",
+    "```pudu",
+    "type E = \{ \}",
+    "```",
+    "",
+    ""
+  ].join("\n")
+}
+
+/// Expected markdown output for `toc.yml`.
+fn expectedMarkdownTocYml() -> Str {
+  [
+    "- name: M",
+    "  href: M.md",
+    "  items:",
+    "  - name: R",
+    "    href: M.R.md",
+    "  - name: T",
+    "    href: M.T.md",
+    "  - name: U",
+    "    href: M.U.md",
+    "- name: N",
+    "  href: N.md",
+    "  items:",
+    "  - name: E",
+    "    href: N.E.md",
+    ""
+  ].join("\n")
+}
+
+/// Expected apiPage output for `M.yml`.
+fn expectedApipageMYml() -> Str {
+  [
+    "#YamlMime:ApiPage",
+    "title: M",
+    "languageId: pudu",
+    "body:",
+    "- h1: M",
+    "- markdown: Mod doc",
+    "- h2: Types",
+    "- list:",
+    "  - text: R",
+    "    url: M.R.html",
+    "  - text: U",
+    "    url: M.U.html",
+    "  - text: T",
+    "    url: M.T.html",
+    "- api3: add",
+    "  id: add",
+    "- code: \"fn add(a: Int) -> Int\"",
+    "- markdown: Adds.",
+    "- parameters:",
+    "  - name: a",
+    "    type: Int",
+    "- api3: K",
+    "  id: K",
+    "- code: \"const K: Int = 1\"",
+    ""
+  ].join("\n")
+}
+
+/// Expected apiPage output for `M.R.yml`.
+fn expectedApipageMRYml() -> Str {
+  [
+    "#YamlMime:ApiPage",
+    "title: R",
+    "languageId: pudu",
+    "body:",
+    "- h1: R",
+    "- facts:",
+    "  - name: Module",
+    "    value:",
+    "      text: M",
+    "      url: M.html",
+    "- code: \"type R = \{ a: Int \}\"",
+    "- markdown: A rec.",
+    "- h2: Fields",
+    "- parameters:",
+    "  - name: a",
+    "    type: Int",
+    "    description: Field a.",
+    ""
+  ].join("\n")
+}
+
+/// Expected apiPage output for `M.U.yml`.
+fn expectedApipageMUYml() -> Str {
+  [
+    "#YamlMime:ApiPage",
+    "title: U",
+    "languageId: pudu",
+    "body:",
+    "- h1: U",
+    "- facts:",
+    "  - name: Module",
+    "    value:",
+    "      text: M",
+    "      url: M.html",
+    "- code: \"type U = A | B\"",
+    "- h2: Variants",
+    "- parameters:",
+    "  - name: A",
+    "    type: \"\"",
+    "    description: \"\"",
+    "  - name: B",
+    "    type: \"\"",
+    "    description: \"\"",
+    ""
+  ].join("\n")
+}
+
+/// Expected apiPage output for `M.T.yml`.
+fn expectedApipageMTYml() -> Str {
+  [
+    "#YamlMime:ApiPage",
+    "title: T",
+    "languageId: pudu",
+    "body:",
+    "- h1: T",
+    "- facts:",
+    "  - name: Module",
+    "    value:",
+    "      text: M",
+    "      url: M.html",
+    "- code: trait T",
+    "- markdown: Tr.",
+    "- h2: Methods",
+    "- api3: go",
+    "  id: go",
+    "- code: \"fn go(self: &Self, n: Int) -> Int\"",
+    "- markdown: Go.",
+    "- parameters:",
+    "  - name: n",
+    "    type: Int",
+    ""
+  ].join("\n")
+}
+
+/// Expected apiPage output for `N.yml`.
+fn expectedApipageNYml() -> Str {
+  [
+    "#YamlMime:ApiPage",
+    "title: N",
+    "languageId: pudu",
+    "body:",
+    "- h1: N",
+    "- h2: Types",
+    "- list:",
+    "  - text: E",
+    "    url: N.E.html",
+    ""
+  ].join("\n")
+}
+
+/// Expected apiPage output for `N.E.yml`.
+fn expectedApipageNEYml() -> Str {
+  [
+    "#YamlMime:ApiPage",
+    "title: E",
+    "languageId: pudu",
+    "body:",
+    "- h1: E",
+    "- facts:",
+    "  - name: Module",
+    "    value:",
+    "      text: N",
+    "      url: N.html",
+    "- code: \"type E = \{ \}\"",
+    ""
+  ].join("\n")
+}
+
+/// Runs every export format contract.
+fn main() -> Int {
+  let json = Export.files(&units(), "json")
+  let checks = Test.suite("Api export", &[
+      Test.equals("json paths", &json.map(fn(entry: (Str, Str)) -> Str {
+            let (path, _text) = entry
+            path
+          }), &["M.json", "N.json", "toc.yml"]),
+      Test.that("json model decodes", match Json.decode(written("json", "M.json")) { case Ok(found) => Json.encode(&found).contains("\"uid\":\"M.T.go\"") case Err(_) => false }),
+      Test.equals("json toc links json files", &written("json", "toc.yml"), &"- name: M\n  href: M.json\n  items:\n  - name: R\n    href: M.R.json\n  - name: T\n    href: M.T.json\n  - name: U\n    href: M.U.json\n- name: N\n  href: N.json\n  items:\n  - name: E\n    href: N.E.json\n"),
+      Test.equals("markdown paths", &Export.files(&units(), "markdown").length(), &7),
+      Test.equals("formats", &Export.FORMATS, &["json", "markdown", "apiPage"]),
+      Test.equals("markdown M.md", &written("markdown", "M.md"), &expectedMarkdownMMd()),
+      Test.equals("markdown M.R.md", &written("markdown", "M.R.md"), &expectedMarkdownMRMd()),
+      Test.equals("markdown M.U.md", &written("markdown", "M.U.md"), &expectedMarkdownMUMd()),
+      Test.equals("markdown M.T.md", &written("markdown", "M.T.md"), &expectedMarkdownMTMd()),
+      Test.equals("markdown N.md", &written("markdown", "N.md"), &expectedMarkdownNMd()),
+      Test.equals("markdown N.E.md", &written("markdown", "N.E.md"), &expectedMarkdownNEMd()),
+      Test.equals("markdown toc.yml", &written("markdown", "toc.yml"), &expectedMarkdownTocYml()),
+      Test.equals("apiPage M.yml", &written("apiPage", "M.yml"), &expectedApipageMYml()),
+      Test.equals("apiPage M.R.yml", &written("apiPage", "M.R.yml"), &expectedApipageMRYml()),
+      Test.equals("apiPage M.U.yml", &written("apiPage", "M.U.yml"), &expectedApipageMUYml()),
+      Test.equals("apiPage M.T.yml", &written("apiPage", "M.T.yml"), &expectedApipageMTYml()),
+      Test.equals("apiPage N.yml", &written("apiPage", "N.yml"), &expectedApipageNYml()),
+      Test.equals("apiPage N.E.yml", &written("apiPage", "N.E.yml"), &expectedApipageNEYml())
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

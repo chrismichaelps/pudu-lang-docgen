@@ -1,0 +1,142 @@
+/** @Docgen.Paths.Module — publication paths and browser destinations share one policy */
+module PuduLangDocgen.Paths
+
+import Std.Char as Char
+import Std.Set as Set
+
+/// Device names that no portable output segment may use, whatever its extension.
+const RESERVED: Set[Str] = setOf([
+    "con", "prn", "aux", "nul", "com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+    "lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"
+  ])
+
+/// Characters that no portable output path may contain.
+const FORBIDDEN: Str = ":%?#<>\"|*"
+
+/// Whether a path names a confined, portable relative output.
+export fn relative(path: Str) -> Bool {
+  if path.isEmpty() || path.startsWith("/") || path.contains("\\") { return false }
+  for character in path.chars() {
+    if character < ' ' || character == '\u{7f}' || FORBIDDEN.contains(character.toText()) { return false }
+  }
+  for part in path.split("/") {
+    if part.isEmpty() || part == "." || part == ".." || part.endsWith(".") || part.endsWith(" ") { return false }
+    if RESERVED.contains(part.split(".")[0].toLower()) { return false }
+  }
+  true
+}
+
+/// Whether a destination leaves the site: HTTP, HTTPS, or mail.
+export fn remote(destination: Str) -> Bool {
+  let lowered = destination.toLower()
+  lowered.startsWith("https://") || lowered.startsWith("http://") || lowered.startsWith("mailto:")
+}
+
+/// Whether a browser destination avoids executable schemes and ambiguous separators.
+export fn href(destination: Str) -> Bool {
+  if destination.isEmpty() || destination.startsWith("//") || destination.contains("\\") { return false }
+  for character in destination.chars() {
+    if character <= ' ' || character == '\u{7f}' { return false }
+  }
+  let lowered = destination.toLower()
+  if lowered.startsWith("https://") || lowered.startsWith("http://") {
+    let rest = destination.drop(if lowered.startsWith("https://") { 8 } else { 7 })
+    return !rest.isEmpty() && !rest.startsWith("/") && !rest.startsWith("?") && !rest.startsWith("#") && !rest.split("/")[0].contains("@")
+  }
+  if lowered.startsWith("mailto:") { return destination.length() > 7 }
+  !pathOf(destination).contains(":")
+}
+
+/// The path of a destination without its query and fragment.
+export fn pathOf(destination: Str) -> Str { destination.split("#")[0].split("?")[0] }
+
+/// The query and fragment a destination carries after its path, including the separator.
+export fn suffixOf(destination: Str) -> Str { destination.drop(pathOf(destination).length()) }
+
+/// A stable lowercase fragment; text with no letters or digits answers `section`.
+export fn slug(text: Str) -> Str {
+  var pieces: Array[Str] = []
+  var dash = false
+  for character in text.toLower().chars() {
+    if Char.isAlphanumeric(character) || character > '\u{7f}' || character == '_' {
+      if dash && !pieces.isEmpty() { pieces = pieces.push("-") }
+      pieces = pieces.push(character.toText())
+      dash = false
+    } else { dash = true }
+  }
+  if pieces.isEmpty() { "section" } else { pieces.join("") }
+}
+
+/// The published path of a source: Markdown and model files become pages, others keep their path.
+export fn output(source: Str) -> Str {
+  let lowered = source.toLower()
+  if lowered.endsWith(".markdown") { return source.take(source.length() - 9) + ".html" }
+  if lowered.endsWith(".md") { return source.take(source.length() - 3) + ".html" }
+  if lowered.endsWith(".yml") { return source.take(source.length() - 4) + ".html" }
+  if lowered.endsWith(".yaml") { return source.take(source.length() - 5) + ".html" }
+  if lowered.endsWith(".json") { return source.take(source.length() - 5) + ".html" }
+  source
+}
+
+/// A local destination resolved from a source file to a root-relative published path.
+/// Remote destinations pass through; escaping the root or naming an unsafe path is refused.
+export fn resolve(source: Str, destination: Str) -> Result[Str, Str] {
+  if !relative(source) { return Err("invalid source path") }
+  if !href(destination) { return Err("unsafe destination") }
+  if remote(destination) { return Ok(destination) }
+  let path = pathOf(destination)
+  let suffix = suffixOf(destination)
+  if path.isEmpty() { return Ok(output(source) + suffix) }
+  if path.contains("%") { return Err("encoded local path is not supported") }
+  let resolved = join(directoryOf(source), path) ?
+  if !relative(resolved) { return Err("invalid local destination") }
+  Ok(output(resolved) + suffix)
+}
+
+/// The directory part of a relative path; a top-level file answers the empty text.
+export fn directoryOf(path: Str) -> Str {
+  let parts = path.split("/")
+  parts.slice(0, parts.length() - 1).join("/")
+}
+
+/// A relative path joined under a directory, collapsing dot segments without leaving the root.
+export fn join(directory: Str, path: Str) -> Result[Str, Str] {
+  var parts: Array[Str] = if directory.isEmpty() { [] } else { directory.split("/") }
+  let segments = path.split("/")
+  var index = 0
+  for part in segments {
+    if part == ".." {
+      if parts.isEmpty() { return Err("destination escapes docset root") }
+      parts = parts.slice(0, parts.length() - 1)
+    } else if part.isEmpty() {
+      if index != segments.length() - 1 { return Err("empty destination segment") }
+    } else if part != "." { parts = parts.push(part) }
+    index = index + 1
+  }
+  if parts.isEmpty() { return Err("destination names the docset root") }
+  Ok(parts.join("/"))
+}
+
+/// The browser path from one published page to another root-relative destination.
+export fn between(from: Str, to: Str) -> Str {
+  if remote(to) || to.startsWith("#") { return to }
+  let origin = from.split("/")
+  let target = to.split("/")
+  var common = 0
+  while common < origin.length() - 1 && common < target.length() - 1 && origin[common] == target[common] { common = common + 1 }
+  var parts: Array[Str] = []
+  for _step in common..(origin.length() - 1) { parts = parts.push("..") }
+  parts.concat(target.slice(common, target.length())).join("/")
+}
+
+/// The `../` prefix leading from a published page back to the site root.
+export fn rootOf(page: Str) -> Str {
+  var parts: Array[Str] = []
+  for _step in 1..page.split("/").length() { parts = parts.push("../") }
+  parts.join("")
+}
+
+/// Text escaped for HTML content and quoted attributes.
+export fn escape(text: Str) -> Str {
+  text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace("\"", "&quot;").replace("'", "&#39;")
+}

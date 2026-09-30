@@ -1,0 +1,206 @@
+/** @Docgen.Markdown.Directives — authoring extension syntax recognized per line */
+module PuduLangDocgen.Markdown.Directives
+
+import Std.Char as Char
+import PuduLangDocgen.Markdown.FrontMatter as FrontMatter
+
+/** @Docgen.Markdown.Directive — a triple-colon container line with named attributes */
+export type Directive = { name: Str, attributes: Array[(Str, Str)], closed: Bool }
+
+/** @Docgen.Markdown.TabHeading — a heading that opens one tab of a tab group */
+export type TabHeading = { level: Int, title: Str, id: Str, condition: Str }
+
+/** @Docgen.Markdown.Excerpt — a code excerpt line naming language, file, and caption */
+export type Excerpt = { language: Str, name: Str, destination: Str, title: Str }
+
+/// A `:::name key="value" flag:::` line; `closed` tells whether it ends on the same line.
+export fn colon(text: Str) -> Option[Directive] {
+  let body = text.trim()
+  if !body.startsWith(":::") { return None }
+  var inner = body.drop(3).trim()
+  let closed = inner.endsWith(":::")
+  if closed { inner = inner.take(inner.length() - 3).trim() }
+  if inner.isEmpty() { return None }
+  var nameEnd = 0
+  let cs = inner.chars()
+  while nameEnd < cs.length() && (Char.isAlphanumeric(cs[nameEnd]) || cs[nameEnd] == '-') { nameEnd = nameEnd + 1 }
+  if nameEnd == 0 { return None }
+  Some(Directive{name: inner.take(nameEnd).toLower(), attributes: attributes(inner.drop(nameEnd)), closed: closed})
+}
+
+/// The value of an attribute, or the empty text.
+export fn value(found: &Directive, key: Str) -> Str {
+  for (name, held) in found.attributes {
+    if name == key { return held }
+  }
+  ""
+}
+
+/// `key="value"` pairs and bare flags, in written order.
+export fn attributes(text: Str) -> Array[(Str, Str)] {
+  var result: Array[(Str, Str)] = []
+  let cs = text.chars()
+  var index = 0
+  while index < cs.length() {
+    while index < cs.length() && Char.isWhitespace(cs[index]) { index = index + 1 }
+    let start = index
+    while index < cs.length() && !Char.isWhitespace(cs[index]) && cs[index] != '=' { index = index + 1 }
+    let key = slice(&cs, start, index)
+    if key.isEmpty() { index = index + 1
+      continue }
+    if index < cs.length() && cs[index] == '=' {
+      index = index + 1
+      let quote = if index < cs.length() { cs[index] } else { ' ' }
+      if quote == '"' || quote == '\'' {
+        let valueStart = index + 1
+        index = valueStart
+        while index < cs.length() && cs[index] != quote { index = index + 1 }
+        result = result.push((key, slice(&cs, valueStart, index)))
+        index = index + 1
+      } else {
+        let valueStart = index
+        while index < cs.length() && !Char.isWhitespace(cs[index]) { index = index + 1 }
+        result = result.push((key, slice(&cs, valueStart, index)))
+      }
+    } else { result = result.push((key, "true")) }
+  }
+  result
+}
+
+/// The alert kind of a quote's first line `[!NOTE]`, uppercased, with any text after it.
+export fn alert(text: Str) -> Option[(Str, Str)] {
+  let body = text.trim()
+  if !body.startsWith("[!") { return None }
+  let close = body.indexOf("]")
+  if close < 3 { return None }
+  let kind = body.drop(2).take(close - 2)
+  for character in kind.chars() {
+    if !Char.isLetter(character) { return None }
+  }
+  if kind.toLower() == "video" || kind.toLower() == "include" { return None }
+  Some((kind.toUpper(), body.drop(close + 1).trim()))
+}
+
+/// The address of a `[!Video address]` line.
+export fn video(text: Str) -> Option[Str] {
+  let body = text.trim()
+  if !body.toLower().startsWith("[!video ") || !body.endsWith("]") { return None }
+  let address = body.drop(8).take(body.length() - 9).trim()
+  if address.isEmpty() { None } else { Some(address) }
+}
+
+/// A tab heading `# [Title](#tab/id/condition)`.
+export fn tab(text: Str) -> Option[TabHeading] {
+  let body = text.trim()
+  var level = 0
+  for character in body.chars() {
+    if character != '#' { break }
+    level = level + 1
+  }
+  if level < 1 || level > 6 { return None }
+  let rest = body.drop(level).trim()
+  if !rest.startsWith("[") || !rest.endsWith(")") { return None }
+  let middle = rest.indexOf("](#tab/")
+  if middle < 1 { return None }
+  let path = rest.drop(middle + 7).take(rest.length() - middle - 8).split("/")
+  if path[0].isEmpty() || path.length() > 2 { return None }
+  Some(TabHeading{level: level, title: rest.drop(1).take(middle - 1), id: path[0], condition: if path.length() == 2 { path[1] } else { "" }})
+}
+
+/// The label and first line of a footnote definition `[^label]: text`.
+export fn footnote(text: Str) -> Option[(Str, Str)] {
+  let body = text.trim()
+  if !body.startsWith("[^") { return None }
+  let close = body.indexOf("]:")
+  if close < 3 || body.take(close).contains(" ") { return None }
+  Some((body.drop(2).take(close - 2), body.drop(close + 2).trim()))
+}
+
+/// The title and path of a whole-line `[!INCLUDE[title](path)]`.
+export fn include(text: Str) -> Option[(Str, Str)] {
+  let body = text.trim()
+  if !body.toUpper().startsWith("[!INCLUDE") || !body.endsWith(")]") { return None }
+  let rest = body.drop(9).trim()
+  if !rest.startsWith("[") { return None }
+  let middle = rest.indexOf("](")
+  if middle < 0 { return None }
+  let path = rest.drop(middle + 2).take(rest.length() - middle - 4).trim()
+  if path.isEmpty() { None } else { Some((rest.drop(1).take(middle - 1), unquoted(path))) }
+}
+
+/// A whole-line `[!code-language[name](path "title")]` excerpt.
+export fn excerpt(text: Str) -> Option[Excerpt] {
+  let body = text.trim()
+  if !body.startsWith("[!code") || !body.endsWith(")]") { return None }
+  let inner = body.drop(1).indexOf("[")
+  if inner < 0 { return None }
+  let open = inner + 1
+  let head = body.drop(6).take(open - 6)
+  let language = if head.startsWith("-") { head.drop(1) } else { head }
+  if !head.isEmpty() && !head.startsWith("-") { return None }
+  let middle = body.indexOf("](")
+  if middle < open { return None }
+  let target = body.drop(middle + 2).take(body.length() - middle - 4).trim()
+  let space = target.indexOf(" \"")
+  let destination = if space < 0 { target } else { target.take(space) }
+  let title = if space < 0 { "" } else { target.drop(space + 2).replace("\"", "") }
+  if destination.isEmpty() { return None }
+  Some(Excerpt{language: language, name: body.drop(open + 1).take(middle - open - 1), destination: destination, title: title})
+}
+
+/// The index of the `:::name-end:::` line closing a container opened at an index, or -1.
+/// Containers of the same name nest.
+export fn extent(lines: &Array[FrontMatter.Line], start: Int, name: Str) -> Int {
+  var level = 0
+  for index in start..lines.length() {
+    match colon(lines[index].text) {
+      case Some(found) => {
+        if found.name == name { level = level + 1 }
+        if found.name == name + "-end" {
+          level = level - 1
+          if level == 0 { return index }
+        }
+      }
+      case None => {}
+    }
+  }
+  -1
+}
+
+/// The columns of a row body: each `:::column span="n":::` up to its `:::column-end:::`.
+/// Lines outside any column are ignored.
+export fn columns(lines: &Array[FrontMatter.Line]) -> Array[(Int, Array[FrontMatter.Line])] {
+  var result: Array[(Int, Array[FrontMatter.Line])] = []
+  var index = 0
+  while index < lines.length() {
+    match colon(lines[index].text) {
+      case Some(found) => {
+        if found.name == "column" {
+          let close = extent(lines, index, "column")
+          let end = if close < 0 { lines.length() } else { close }
+          let written = value(&found, "span")
+          let span = match written.toInt() {
+            case Some(count) => if count < 1 { 1 } else { count }
+            case None => 1
+          }
+          result = result.push((span, lines.slice(index + 1, end)))
+          index = end + 1
+        } else { index = index + 1 }
+      }
+      case None => { index = index + 1 }
+    }
+  }
+  result
+}
+
+/// A path with one pair of surrounding angle brackets removed.
+fn unquoted(path: Str) -> Str {
+  if path.startsWith("<") && path.endsWith(">") { path.drop(1).take(path.length() - 2) } else { path }
+}
+
+/// Text of the characters in a half-open range.
+fn slice(cs: &Array[Char], from: Int, to: Int) -> Str {
+  var pieces: Array[Str] = []
+  for index in from..to { pieces = pieces.push(cs[index].toText()) }
+  pieces.join("")
+}

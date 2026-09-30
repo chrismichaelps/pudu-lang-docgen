@@ -1,0 +1,7 @@
+/* Site styles loaded after the default theme. Colors come from the theme's custom properties
+   so light and dark schemes stay consistent. */
+
+/* The logo is published at full resolution for link previews; show it small in articles. */
+.content img[src$="pudu-lang-short.png"] {
+  max-width: 120px;
+}

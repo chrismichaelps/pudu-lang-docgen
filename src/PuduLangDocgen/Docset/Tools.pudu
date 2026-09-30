@@ -1,0 +1,133 @@
+/** @Docgen.Docset.Tools — git history, diagram rendering, remote reference maps, and reference services */
+module PuduLangDocgen.Docset.Tools
+
+import Std.Bytes as Bytes
+import Std.Env as Env
+import Std.Http.Client as Client
+import Std.Process as Process
+import Std.Result as Result
+import PuduLangDocgen.Configuration as Configuration
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Docset.Walk as Walk
+import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.References as References
+import PuduLangDocgen.Repository as Repository
+
+/// Longest a remote reference map may take to arrive, in milliseconds.
+const FETCH_MILLIS: Int = 30000
+
+/// The latest change date of every file git tracks under a folder, or none without git.
+export fn history(base: Str) -> Map[Str, Str] {
+  if !Process.isAvailable("git") { return mapOf([]) }
+  match Process.run("git", &["-C", base, "log", "--pretty=format:@%cs", "--name-only", "--relative", "--", "."]) {
+    case Ok(finished) => if finished.status == 0 { Repository.history(finished.output) } else { mapOf([]) }
+    case Err(_) => mapOf([])
+  }
+}
+
+/// The repository behind edit links: configured values first, then environment variables of
+/// the running build service, then the local clone's `origin` remote and current branch.
+export fn repository(base: Str, configured: &Configuration.Contribution) -> Configuration.Contribution {
+  let (environmentRepo, environmentBranch) = Repository.fromEnvironment(&Env.variables())
+  var repo = if configured.repo.isEmpty() { environmentRepo } else { Repository.normalize(configured.repo) }
+  var branch = if environmentBranch.isEmpty() { configured.branch } else { environmentBranch }
+  var prefix = configured.path
+  if Process.isAvailable("git") {
+    if repo.isEmpty() { repo = Repository.normalize(trimmed(Process.output("git", &["-C", base, "remote", "get-url", "origin"]))) }
+    if environmentBranch.isEmpty() && configured.branch == "main" {
+      let local = trimmed(Process.output("git", &["-C", base, "rev-parse", "--abbrev-ref", "HEAD"]))
+      if !local.isEmpty() && local != "HEAD" { branch = local }
+    }
+    if prefix.isEmpty() {
+      let found = trimmed(Process.output("git", &["-C", base, "rev-parse", "--show-prefix"]))
+      prefix = if found.endsWith("/") { found.take(found.length() - 1) } else { found }
+    }
+  }
+  Configuration.Contribution{repo: repo, branch: branch, path: prefix}
+}
+
+/// PlantUML sources drawn by a local renderer as SVG data addresses; failures are reported
+/// and leave the remote server to draw that diagram.
+export fn diagrams(sources: &Array[Str], settings: &Configuration.Diagrams) -> (Map[Str, Str], Array[Docgen.Diagnostic]) {
+  var drawn: Array[(Str, Str)] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  for source in *sources {
+    match Process.withInput(settings.java, &["-jar", settings.jar, "-tsvg", "-pipe"], source) {
+      case Ok(finished) => {
+        if finished.status == 0 && finished.output.contains("<svg") {
+          drawn = drawn.push((source, "data:image/svg+xml;base64," + Bytes.encodeBase64(&Bytes.fromText(finished.output))))
+        } else { problems = problems.push(Docgen.warning(Codes.TOOL_FAILED, settings.jar, 1, "PlantUML did not draw a diagram: " + finished.errors.trim())) }
+      }
+      case Err(reason) => { problems = problems.push(Docgen.warning(Codes.TOOL_FAILED, settings.jar, 1, "PlantUML could not start: " + reason)) }
+    }
+  }
+  (mapOf(drawn), problems)
+}
+
+/// References from cross-reference maps named by web address or project path.
+export fn references(base: Str, sources: &Array[Str]) -> (Array[Docgen.Reference], Array[Docgen.Diagnostic]) {
+  var found: Array[Docgen.Reference] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  for source in *sources {
+    let text = if Paths.remote(source) { fetch(source) } else { Result.mapErr(Walk.text(base, source), |problem: Docgen.Diagnostic| problem.message) }
+    match text {
+      case Ok(held) => match References.parse(source, held) {
+        case Ok(read) => { found = found.concat(read) }
+        case Err(reason) => { problems = problems.push(Docgen.warning(Codes.XREF_UNAVAILABLE, source, 1, reason)) }
+      }
+      case Err(reason) => { problems = problems.push(Docgen.warning(Codes.XREF_UNAVAILABLE, source, 1, reason)) }
+    }
+  }
+  (found, problems)
+}
+
+/// References that reference services know for identities a build left unresolved. Services
+/// are asked in order; the first to answer for an identity is kept, and a service that
+/// fails is reported once and not asked again.
+export fn consult(services: &Array[Str], wanted: &Array[Str]) -> (Array[Docgen.Reference], Array[Docgen.Diagnostic]) {
+  var found: Array[Docgen.Reference] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  var failing: Array[Str] = []
+  for uid in *wanted {
+    for service in *services {
+      if failing.contains(service) { continue }
+      let address = References.serviceAddress(service, uid)
+      let answered = match fetch(address) {
+        case Ok(text) => References.parse(address, text)
+        case Err(reason) => Err(reason)
+      }
+      match answered {
+        case Ok(read) => {
+          let matching = read.filter(|reference: Docgen.Reference| reference.uid == uid)
+          if !matching.isEmpty() {
+            found = found.push(matching[0])
+            break
+          }
+        }
+        case Err(reason) => {
+          failing = failing.push(service)
+          problems = problems.push(Docgen.warning(Codes.XREF_UNAVAILABLE, service, 1, reason))
+        }
+      }
+    }
+  }
+  (found, problems)
+}
+
+/// The body of a web address fetched within the deadline.
+export fn fetch(address: Str) -> Result[Str, Str] {
+  let limits = Client.Limits{..Client.limits(), deadlineMillis: FETCH_MILLIS}
+  match Client.fetch(address, &limits) {
+    case Ok(response) => if response.status.code >= 200 && response.status.code < 300 { Ok(response.body) } else { Err("server answered " + show(response.status.code)) }
+    case Err(problem) => Err(Client.explain(&problem))
+  }
+}
+
+/// A command's output without surrounding white space, or the empty text when it failed.
+fn trimmed(result: Result[Str, Str]) -> Str {
+  match result {
+    case Ok(held) => held.trim()
+    case Err(_) => ""
+  }
+}

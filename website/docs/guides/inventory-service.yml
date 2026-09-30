@@ -1,0 +1,219 @@
+openapi: 3.0.3
+info:
+  title: Inventory Service
+  version: 1.2.0
+  description: |
+    A sample HTTP API that keeps stock levels for a warehouse. It is published on this site to
+    show how an OpenAPI description becomes a reference page. The service is illustrative and
+    is not deployed.
+
+    Quantities are whole units. Every change is recorded as a **movement**: a receipt, a sale,
+    or a count. See the [HTTP API reference guide](http-api.md) for how this page is produced.
+servers:
+  - url: https://inventory.example.com/v1
+  - url: https://staging.inventory.example.com/v1
+tags:
+  - name: Items
+    description: Stock keeping units and their quantities.
+  - name: Movements
+    description: Receipts, sales, and counts that change quantities.
+paths:
+  /items:
+    get:
+      operationId: listItems
+      summary: List items
+      description: Returns items in SKU order, one page at a time.
+      tags: [Items]
+      parameters:
+        - name: after
+          in: query
+          required: false
+          description: Return items whose SKU sorts after this value.
+          schema:
+            type: string
+        - name: limit
+          in: query
+          required: false
+          description: Largest number of items to return, from 1 to 200.
+          schema:
+            type: integer
+            format: int32
+      responses:
+        '200':
+          description: A page of items.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ItemPage'
+    post:
+      operationId: createItem
+      summary: Create an item
+      description: Registers a new SKU with a quantity of zero.
+      tags: [Items]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/NewItem'
+      responses:
+        '201':
+          description: The item was created.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        '409':
+          description: An item with this SKU already exists.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+  /items/{sku}:
+    get:
+      operationId: getItem
+      summary: Get an item
+      tags: [Items]
+      parameters:
+        - name: sku
+          in: path
+          required: true
+          description: The stock keeping unit.
+          schema:
+            type: string
+      responses:
+        '200':
+          description: The item.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        '404':
+          description: No item has this SKU.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+    delete:
+      operationId: retireItem
+      summary: Retire an item
+      description: Retires an item whose quantity is zero. Retired items keep their history.
+      tags: [Items]
+      deprecated: false
+      parameters:
+        - name: sku
+          in: path
+          required: true
+          description: The stock keeping unit.
+          schema:
+            type: string
+      responses:
+        '204':
+          description: The item was retired.
+        '409':
+          description: The item still has stock.
+  /items/{sku}/movements:
+    post:
+      operationId: recordMovement
+      summary: Record a movement
+      description: Applies a receipt, sale, or count to an item and returns the new quantity.
+      tags: [Movements]
+      parameters:
+        - name: sku
+          in: path
+          required: true
+          description: The stock keeping unit.
+          schema:
+            type: string
+        - name: Idempotency-Key
+          in: header
+          required: false
+          description: A client-chosen key that makes retries safe.
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Movement'
+      responses:
+        '200':
+          description: The item after the movement.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Item'
+        '422':
+          description: A sale would make the quantity negative.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Problem'
+components:
+  schemas:
+    Item:
+      type: object
+      description: One stock keeping unit and the quantity on hand.
+      required: [sku, quantity]
+      properties:
+        sku:
+          type: string
+          description: The stock keeping unit.
+        name:
+          type: string
+          description: A display name.
+        quantity:
+          type: integer
+          format: int64
+          description: Units on hand.
+    NewItem:
+      type: object
+      description: The fields of an item to create.
+      required: [sku]
+      properties:
+        sku:
+          type: string
+          description: The stock keeping unit.
+        name:
+          type: string
+          description: A display name.
+    ItemPage:
+      type: object
+      description: One page of items.
+      required: [items]
+      properties:
+        items:
+          type: array
+          description: Items in SKU order.
+          items:
+            $ref: '#/components/schemas/Item'
+        next:
+          type: string
+          description: The value to pass as `after` for the next page, absent on the last page.
+    Movement:
+      type: object
+      description: A change to an item's quantity.
+      required: [kind, quantity]
+      properties:
+        kind:
+          $ref: '#/components/schemas/MovementKind'
+        quantity:
+          type: integer
+          format: int64
+          description: Units received or sold, or the counted quantity.
+    MovementKind:
+      type: string
+      description: What a movement does to the quantity.
+      enum: [received, sold, counted]
+    Problem:
+      type: object
+      description: An error response.
+      required: [code, message]
+      properties:
+        code:
+          type: string
+          description: A stable error code.
+        message:
+          type: string
+          description: A readable explanation.

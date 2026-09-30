@@ -1,0 +1,54 @@
+/** @Docgen.Template.Tests — templates fill metadata exactly and refuse malformed tags */
+module PuduLangDocgen.TemplateTest
+
+import Std.Io as Io
+import Std.Test as Test
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Template as Template
+
+/// Metadata used by every check.
+fn context() -> Docgen.Meta {
+  Docgen.Fields([
+      ("title", Docgen.Text("A & B")), ("html", Docgen.Text("<b>x</b>")), ("count", Docgen.Whole(2)), ("on", Docgen.Flag(true)),
+      ("off", Docgen.Flag(false)), ("empty", Docgen.Items([])), ("items", Docgen.Items([Docgen.Fields([("name", Docgen.Text("one"))]), Docgen.Fields([("name", Docgen.Text("two"))])])),
+      ("words", Docgen.Items([Docgen.Text("a"), Docgen.Text("b")])), ("site", Docgen.Fields([("name", Docgen.Text("Docs")), ("owner", Docgen.Fields([("name", Docgen.Text("Team"))]))]))
+    ])
+}
+
+/// A template rendered against the shared metadata and one partial.
+fn rendered(text: Str) -> Str {
+  let partial = match Template.parse("[\{\{name\}\}]") {
+    case Ok(nodes) => nodes
+    case Err(_) => []
+  }
+  match Template.parse(text) {
+    case Ok(nodes) => Template.render(&nodes, &context(), &mapOf([("item", partial)]))
+    case Err(reason) => "error: " + reason
+  }
+}
+
+/// Runs every tag, section, lookup, and failure contract.
+fn main() -> Int {
+  let checks = Test.suite("Template", &[
+      Test.equals("escaped value", &rendered("\{\{title\}\}"), &"A &amp; B"),
+      Test.equals("raw values", &rendered("\{\{\{html\}\}\} \{\{& html\}\}"), &"<b>x</b> <b>x</b>"),
+      Test.equals("numbers and flags", &rendered("\{\{count\}\} \{\{on\}\}"), &"2 true"),
+      Test.equals("missing value empty", &rendered("[\{\{nope\}\}]"), &"[]"),
+      Test.equals("list section", &rendered("\{\{#items\}\}<\{\{name\}\}>\{\{/items\}\}"), &"<one><two>"),
+      Test.equals("scalar list with dot", &rendered("\{\{#words\}\}\{\{.\}\},\{\{/words\}\}"), &"a,b,"),
+      Test.equals("truthy and falsy sections", &rendered("\{\{#on\}\}yes\{\{/on\}\}\{\{#off\}\}no\{\{/off\}\}\{\{#empty\}\}no\{\{/empty\}\}"), &"yes"),
+      Test.equals("inverted sections", &rendered("\{\{^off\}\}a\{\{/off\}\}\{\{^empty\}\}b\{\{/empty\}\}\{\{^on\}\}c\{\{/on\}\}"), &"ab"),
+      Test.equals("object section scopes", &rendered("\{\{#site\}\}\{\{name\}\}/\{\{title\}\}\{\{/site\}\}"), &"Docs/A &amp; B"),
+      Test.equals("dotted names", &rendered("\{\{site.owner.name\}\}"), &"Team"),
+      Test.equals("partials see the context", &rendered("\{\{#items\}\}\{\{>item\}\}\{\{/items\}\}"), &"[one][two]"),
+      Test.equals("unknown partial empty", &rendered("a\{\{>none\}\}b"), &"ab"),
+      Test.equals("comments dropped", &rendered("a\{\{! note \}\}b"), &"ab"),
+      Test.equals("unclosed section", &rendered("\{\{#on\}\}x"), &"error: section on is not closed"),
+      Test.equals("mismatched section", &rendered("\{\{#on\}\}x\{\{/off\}\}"), &"error: section on is closed by off"),
+      Test.equals("stray close", &rendered("x\{\{/on\}\}"), &"error: section on is closed without being opened"),
+      Test.equals("unclosed tag", &rendered("\{\{title"), &"error: tag is not closed")
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

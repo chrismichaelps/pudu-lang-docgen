@@ -1,0 +1,196 @@
+/** @Docgen.Command.Seam — the docgen command line and its exit statuses */
+module PuduLangDocgen.Command
+
+import Std.Concurrent as Concurrent
+import Std.Io as Io
+import Std.Path as Path
+import Std.Process as Process
+import PuduLangDocgen.Build as Build
+import PuduLangDocgen.Command.Actions as Actions
+import PuduLangDocgen.Command.Arguments as Arguments
+import PuduLangDocgen.Constants.Package as Package
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Docset as Docset
+import PuduLangDocgen.Serve as Serve
+import PuduLangLog.Logger as Logger
+import PuduLangLog.Value as Value
+
+/// Default port of the preview server.
+const PORT: Int = 8080
+
+/// Milliseconds between checks for changed sources while watching.
+const WATCH_MILLIS: Int = 1000
+
+/// Milliseconds to wait for the preview server before opening a browser.
+const OPEN_DELAY_MILLIS: Int = 600
+
+/// Programs that open an address in the default browser, tried in order.
+const OPENERS: Array[Str] = ["open", "xdg-open", "wslview"]
+
+/// Runs a command line and answers its exit status: 0 success, 1 failed work, 2 invalid usage.
+export fn run(arguments: &Array[Str]) -> Int {
+  let parsed = match Arguments.parse(arguments) {
+    case Ok(found) => found
+    case Err(reason) => {
+      let _said = Io.writeErrorLine(reason + "\n\n" + Arguments.usage())
+      return 2
+    }
+  }
+  if Arguments.has(&parsed, "--help") || parsed.command == "help" {
+    let _said = Io.writeLine(Arguments.usage())
+    return 0
+  }
+  if parsed.command == "version" {
+    let _said = Io.writeLine(Package.NAME + " " + Package.VERSION)
+    return 0
+  }
+  let log = match Actions.logger(&parsed) {
+    case Ok(found) => found
+    case Err(reason) => {
+      let _said = Io.writeErrorLine(reason)
+      return 2
+    }
+  }
+  let status = dispatch(&log, &parsed)
+  Logger.close(&log)
+  status
+}
+
+/// The command a parsed line names, run with a logger.
+fn dispatch(log: &Logger.Logger, parsed: &Arguments.Parsed) -> Int {
+  if parsed.command == "serve" { return serve(log, if parsed.positional.isEmpty() { "_site" } else { parsed.positional[0] }, parsed, "") }
+  if parsed.command == "init" { return Actions.initialize(log, parsed) }
+  if parsed.command == "template" { return Actions.template(log, parsed) }
+  if parsed.command == "download" { return Actions.download(log, parsed) }
+  if parsed.command == "merge" { return Actions.merge(log, parsed) }
+  let config = if parsed.positional.isEmpty() { Package.CONFIG_FILE } else { Arguments.configPath(parsed.positional[0]) }
+  let chosen = match options(parsed) {
+    case Ok(found) => found
+    case Err(reason) => {
+      log.error("\{Reason\}", [Value.text(reason)])
+      return 2
+    }
+  }
+  if parsed.command == "metadata" {
+    return match Docset.metadata(config, &chosen) {
+      case Ok(written) => {
+        for path in written { Actions.say(log, "wrote " + path) }
+        0
+      }
+      case Err(problems) => Actions.failed(log, &problems)
+    }
+  }
+  if parsed.command == "pdf" {
+    return match Docset.pdf(config, &chosen) {
+      case Ok(produced) => {
+        for path in produced { Actions.say(log, "wrote " + path) }
+        0
+      }
+      case Err(problems) => Actions.failed(log, &problems)
+    }
+  }
+  let outcome = if parsed.command == "build" {
+    match Docset.build(config, &chosen, &Build.extensions()) {
+      case Ok(report) => Ok((report, []))
+      case Err(problems) => Err(problems)
+    }
+  } else { Docset.buildAll(config, &chosen) }
+  match outcome {
+    case Ok((report, produced)) => {
+      Actions.report(log, &report.diagnostics)
+      for path in report.written { Actions.detail(log, "wrote " + path) }
+      for path in report.removed { Actions.detail(log, "removed " + path) }
+      for path in produced { Actions.say(log, "wrote " + path) }
+      Actions.say(log, "Build succeeded: " + show(report.written.length()) + " written, " + show(report.unchanged.length()) + " unchanged, " + show(report.removed.length()) + " removed.")
+      if Arguments.has(parsed, "--serve") {
+        let folder = Path.join(Path.directoryOf(config), if chosen.output.isEmpty() { "_site" } else { chosen.output })
+        return serve(log, folder, parsed, config)
+      }
+      0
+    }
+    case Err(problems) => Actions.failed(log, &problems)
+  }
+}
+
+/// Docset options from parsed arguments.
+fn options(parsed: &Arguments.Parsed) -> Result[Docset.Options, Str] {
+  var metadata: Array[(Str, Docgen.Meta)] = []
+  for written in Arguments.valuesOf(parsed, "--metadata") {
+    let at = written.indexOf("=")
+    if at < 1 { return Err("metadata must be written key=value: " + written) }
+    let value = written.drop(at + 1)
+    metadata = metadata.push((written.take(at), if value == "true" { Docgen.Flag(true) } else if value == "false" { Docgen.Flag(false) } else { Docgen.Text(value) }))
+  }
+  Ok(Docset.Options{..Docset.options(),
+      output: Arguments.valueOf(parsed, "--output", ""), metadata: metadata, xref: Arguments.valuesOf(parsed, "--xref"),
+      templates: Arguments.valuesOf(parsed, "--template").concat(Arguments.valuesOf(parsed, "--theme")),
+      force: Arguments.has(parsed, "--force"), dryRun: Arguments.has(parsed, "--dryRun"), warningsAsErrors: Arguments.has(parsed, "--warningsAsErrors"),
+      disableGitFeatures: Arguments.has(parsed, "--disableGitFeatures"), exportRawModel: Arguments.has(parsed, "--exportRawModel"),
+      exportViewModel: Arguments.has(parsed, "--exportViewModel") })
+}
+
+/// Serves a folder with the host and port options, answering an exit status. With `--watch`
+/// and a configuration, the site is rebuilt whenever a source changes; `--open-browser` and
+/// `--open-file` open the preview once the server is listening.
+fn serve(log: &Logger.Logger, folder: Str, parsed: &Arguments.Parsed, config: Str) -> Int {
+  let host = Arguments.valueOf(parsed, "--hostname", "localhost")
+  let port = match Arguments.valueOf(parsed, "--port", show(PORT)).toInt() {
+    case Some(found) => found
+    case None => {
+      log.error("port must be a number", [])
+      return 2
+    }
+  }
+  if !config.isEmpty() && Arguments.has(parsed, "--watch") { watch(log, config, parsed) }
+  let file = Arguments.valueOf(parsed, "--open-file", "")
+  if Arguments.has(parsed, "--open-browser") || !file.isEmpty() {
+    let address = "http://" + (if host == "0.0.0.0" { "localhost" } else { host }) + ":" + show(port) + "/" + file
+    let _opening = Concurrent.start(fn() -> () {
+        let _paused = Concurrent.sleep(OPEN_DELAY_MILLIS)
+        for opener in OPENERS {
+          if Process.isAvailable(opener) {
+            let _opened = Process.run(opener, &[address])
+            return
+          }
+        }
+      })
+  }
+  match Serve.serve(folder, host, port) {
+    case Ok(_) => 0
+    case Err(reason) => {
+      log.error("cannot serve \{Folder\}: \{Reason\}", [Value.text(folder), Value.text(reason)])
+      1
+    }
+  }
+}
+
+/// Starts rebuilding the site whenever a source's content changes.
+fn watch(log: &Logger.Logger, config: Str, parsed: &Arguments.Parsed) -> () {
+  let chosen = match options(parsed) {
+    case Ok(found) => found
+    case Err(_) => Docset.options()
+  }
+  let output = if chosen.output.isEmpty() { "_site" } else { chosen.output }
+  let reporter = *log
+  let started = Concurrent.start(fn() -> () {
+      var seen = Docset.fingerprint(config, output)
+      while true {
+        let _paused = Concurrent.sleep(WATCH_MILLIS)
+        let current = Docset.fingerprint(config, output)
+        if current != seen {
+          seen = current
+          match Docset.build(config, &chosen, &Build.extensions()) {
+            case Ok(report) => {
+              Actions.report(&reporter, &report.diagnostics)
+              Actions.say(&reporter, "Rebuilt: " + show(report.written.length()) + " written, " + show(report.removed.length()) + " removed.")
+            }
+            case Err(problems) => Actions.report(&reporter, &problems)
+          }
+        }
+      }
+    })
+  match started {
+    case Ok(_) => Actions.say(log, "Watching " + config + " for changes")
+    case Err(_) => log.warning("cannot watch for changes; serving without rebuilding", [])
+  }
+}

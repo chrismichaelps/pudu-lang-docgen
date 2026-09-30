@@ -1,0 +1,8 @@
+- name: Home
+  href: index.md
+- name: Guide
+  href: guide/
+- name: API
+  href: api/
+- name: HTTP API
+  href: rest/inventory.yml

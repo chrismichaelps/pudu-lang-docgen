@@ -1,0 +1,80 @@
+/** @Docgen.Build.Checks — whole-site validation of fragments, outputs, and diagnostic levels */
+module PuduLangDocgen.Build.Checks
+
+import Std.Map as Map
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Paths as Paths
+
+/// Fragment links that name no element of their target page. Links to files other than pages
+/// are not checked for fragments; links to missing files were reported while rendering.
+export fn fragments(pages: &Array[Docgen.Page]) -> Array[Docgen.Diagnostic] {
+  var ids: Map[Str, Array[Str]] = mapOf([])
+  for page in *pages { ids = Map.insert(&ids, page.path, anchors(page.body)) }
+  var problems: Array[Docgen.Diagnostic] = []
+  for page in *pages {
+    for link in page.links {
+      let parts = link.target.split("#")
+      if parts.length() < 2 || parts[1].isEmpty() { continue }
+      match Map.get(&ids, parts[0]) {
+        case Some(found) => {
+          if !found.contains(parts[1]) { problems = problems.push(Docgen.warning(Codes.FRAGMENT_MISSING, page.source, link.line, "no section " + parts[1] + " in " + parts[0])) }
+        }
+        case None => {}
+      }
+    }
+  }
+  problems
+}
+
+/// Every `id` attribute value in HTML.
+export fn anchors(html: Str) -> Array[Str] {
+  var result: Array[Str] = []
+  var rest = html
+  var at = rest.indexOf(" id=\"")
+  while at >= 0 {
+    rest = rest.drop(at + 5)
+    let end = rest.indexOf("\"")
+    if end < 0 { break }
+    result = result.push(rest.take(end).replace("&amp;", "&").replace("&quot;", "\"").replace("&#39;", "'").replace("&lt;", "<").replace("&gt;", ">"))
+    rest = rest.drop(end)
+    at = rest.indexOf(" id=\"")
+  }
+  result
+}
+
+/// Output paths that are not portable, collide ignoring case, or put a file where a folder is.
+export fn outputs(paths: &Array[Str]) -> Array[Docgen.Diagnostic] {
+  var problems: Array[Docgen.Diagnostic] = []
+  var seen: Map[Str, Bool] = mapOf([])
+  var folders: Map[Str, Bool] = mapOf([])
+  for path in *paths {
+    let lower = path.toLower()
+    if !Paths.relative(path) { problems = problems.push(Docgen.error(Codes.OUTPUT_INVALID, path, 1, "output path is not portable")) }
+    if Map.containsKey(&seen, lower) { problems = problems.push(Docgen.error(Codes.OUTPUT_COLLISION, path, 1, "two outputs share this path")) }
+    seen = Map.insert(&seen, lower, true)
+    let parts = lower.split("/")
+    for depth in 1..parts.length() { folders = Map.insert(&folders, parts.slice(0, depth).join("/"), true) }
+  }
+  for path in *paths {
+    if Map.containsKey(&folders, path.toLower()) { problems = problems.push(Docgen.error(Codes.OUTPUT_COLLISION, path, 1, "an output file has the path of an output folder")) }
+  }
+  problems
+}
+
+/// Diagnostics with configured levels applied: `off` drops a code, `info`, `warning`, and
+/// `error` set its severity, and with `strict` every remaining warning becomes an error.
+export fn ruled(diagnostics: &Array[Docgen.Diagnostic], rules: &Array[(Str, Str)], strict: Bool) -> Array[Docgen.Diagnostic] {
+  var result: Array[Docgen.Diagnostic] = []
+  for held in *diagnostics {
+    var level = ""
+    for (code, chosen) in *rules {
+      if code == held.code { level = chosen }
+    }
+    if level == "off" { continue }
+    var severity = if level == "error" { Docgen.Error } else if level == "warning" { Docgen.Warning } else if level == "info" { Docgen.Information } else { held.severity }
+    if strict && severity == Docgen.Warning { severity = Docgen.Error }
+    result = result.push(Docgen.Diagnostic{..held, severity: severity})
+  }
+  result
+}

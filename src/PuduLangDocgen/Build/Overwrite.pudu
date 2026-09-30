@@ -1,0 +1,115 @@
+/** @Docgen.Build.Overwrite — sections that amend documented identities from separate files */
+module PuduLangDocgen.Build.Overwrite
+
+import PuduLangDocgen.Api.Model as Model
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Yaml as Yaml
+
+/** @Docgen.Build.Section — one amendment: target identity, metadata, and Markdown content */
+export type Section = { uid: Str, meta: Array[(Str, Docgen.Meta)], content: Str, target: Str, source: Str, line: Int }
+
+/// Stand-in for the `*content` alias, which the YAML reader refuses.
+const CONTENT: Str = "\u{1}content"
+
+/// The sections of an overwrite file. A header is a `---` block whose YAML is a mapping with a
+/// `uid`; a later block whose YAML is not a mapping stays Markdown. A key whose value is
+/// `*content` receives the section's Markdown instead of the body.
+export fn parse(path: Str, text: Str) -> (Array[Section], Array[Docgen.Diagnostic]) {
+  let lines = text.replace("\r\n", "\n").split("\n")
+  var sections: Array[Section] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  var index = 0
+  var current: Option[Section] = None
+  var body: Array[Str] = []
+  while index < lines.length() {
+    if lines[index].trim() == "---" {
+      var close = index + 1
+      while close < lines.length() && lines[close].trim() != "---" { close = close + 1 }
+      if close < lines.length() {
+        let header = lines.slice(index + 1, close).map(|line: Str| line.replace(": *content", ": \"" + CONTENT + "\"")).join("\n")
+        match Yaml.decode(header) {
+          case Ok(Docgen.Fields(fields)) => {
+            sections = finish(sections, &current, &body)
+            let uid = Meta.textOr(&fields, "uid", "")
+            if uid.isEmpty() {
+              problems = problems.push(Docgen.error(Codes.OVERWRITE_INVALID, path, index + 1, "overwrite header needs a uid"))
+              current = None
+            } else {
+              var target = ""
+              var meta: Array[(Str, Docgen.Meta)] = []
+              for (key, held) in fields {
+                if held == Docgen.Text(CONTENT) { target = key } else if key != "uid" { meta = meta.push((key, held)) }
+              }
+              current = Some(Section{uid: uid, meta: meta, content: "", target: target, source: path, line: index + 1})
+            }
+            body = []
+            index = close + 1
+            continue
+          }
+          case Err(reason) => {
+            if index == 0 { problems = problems.push(Docgen.error(Codes.OVERWRITE_INVALID, path, 1, "overwrite header: " + reason)) }
+          }
+          case _ => {}
+        }
+      }
+    }
+    body = body.push(lines[index])
+    index = index + 1
+  }
+  (finish(sections, &current, &body), problems)
+}
+
+/// Sections with the open one closed over its collected body.
+fn finish(sections: Array[Section], current: &Option[Section], body: &Array[Str]) -> Array[Section] {
+  match current {
+    case Some(open) => sections.push(Section{..open, content: body.join("\n").trim()})
+    case None => sections
+  }
+}
+
+/// Metadata the sections give an identity, later sections winning.
+export fn metaFor(sections: &Array[Section], uid: Str) -> Array[(Str, Docgen.Meta)] {
+  var result: Array[(Str, Docgen.Meta)] = []
+  for section in *sections {
+    if section.uid == uid { result = Meta.merge(&result, &section.meta) }
+  }
+  result
+}
+
+/// Modules with their declarations' documentation amended: content aimed at `summary` or
+/// `remarks` replaces that part, content aimed at `example` adds an example section, and
+/// content aimed at nothing is added after the existing documentation.
+export fn units(all: &Array[Model.Unit], sections: &Array[Section]) -> Array[Model.Unit] {
+  if sections.isEmpty() { return *all }
+  all.map(fn(unit: Model.Unit) -> Model.Unit {
+      let members = unit.members.map(fn(member: Model.Member) -> Model.Member {
+          let inner = member.members.map(|held: Model.Member| Model.Member{..held, doc: amended(held.uid, held.doc, sections)})
+          Model.Member{..member, doc: amended(member.uid, member.doc, sections), members: inner}
+        })
+      Model.Unit{..unit, doc: amended(unit.uid, unit.doc, sections), members: members}
+    })
+}
+
+/// Documentation with every section for an identity applied in order.
+fn amended(uid: Str, doc: Str, sections: &Array[Section]) -> Str {
+  var result = doc
+  for section in *sections {
+    if section.uid != uid || section.content.isEmpty() { continue }
+    let summary = Model.summary(result)
+    let remarks = Model.remarks(result)
+    result = if section.target == "summary" { joined(section.content, remarks) }
+      else if section.target == "remarks" { joined(summary, section.content) }
+      else if section.target == "example" { joined(result, "## Examples\n\n" + section.content) }
+      else { joined(result, section.content) }
+  }
+  result
+}
+
+/// Two pieces of Markdown separated by a blank line, dropping empty ones.
+fn joined(first: Str, second: Str) -> Str {
+  if first.trim().isEmpty() { return second }
+  if second.trim().isEmpty() { return first }
+  first + "\n\n" + second
+}

@@ -1,0 +1,185 @@
+/** @Docgen.Api.Catalog — selected declarations, their pages, identities, and navigation */
+module PuduLangDocgen.Api.Catalog
+
+import Std.Glob as Glob
+import Std.List as List
+import Std.Regex as Regex
+import PuduLangDocgen.Api.Model as Model
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+
+/** @Docgen.Api.Rule — an include or exclude decision for identities a pattern matches */
+export type Rule = { include: Bool, pattern: Regex.Regex, kind: Str }
+
+/** @Docgen.Api.Options — where reference pages go and which declarations they show */
+export type Options = {
+  dest: Str,
+  includePrivate: Bool,
+  include: Array[Str],
+  exclude: Array[Str],
+  rules: Array[Rule],
+  sourceUrl: Str,
+  sourceExclude: Array[Str],
+  nested: Bool,
+  separate: Bool,
+  skipMarkup: Bool,
+  alphabetic: Bool,
+  categories: Str
+}
+
+/// Options that show exported declarations under `api` with default layouts.
+export fn defaults() -> Options {
+  Options{dest: "api", includePrivate: false, include: [], exclude: [], rules: [], sourceUrl: "", sourceExclude: [], nested: false, separate: false, skipMarkup: false, alphabetic: false, categories: "none"}
+}
+
+/// Category headings of module navigation and the member kinds each holds.
+const CATEGORIES: Array[(Str, Array[Str])] = [
+  ("Types", ["record", "union", "alias", "opaque"]), ("Traits", ["trait"]), ("Functions", ["function"]), ("Constants", ["constant"])
+]
+
+/// Rules of a filter file: `apiRules` listing `include` or `exclude` entries, each with a
+/// `uidRegex` and an optional `type` of `Module`, `Type`, `Function`, `Constant`, or `Member`.
+export fn rules(value: &Docgen.Meta) -> Result[Array[Rule], Str] {
+  let fields = match value {
+    case Docgen.Fields(found) => found
+    case _ => { return Err("filter must be an object with apiRules") }
+  }
+  let listed = match Meta.get(&fields, "apiRules") {
+    case Some(Docgen.Items(found)) => found
+    case _ => { return Err("filter needs an apiRules list") }
+  }
+  var result: Array[Rule] = []
+  for held in listed {
+    let entry = match held {
+      case Docgen.Fields(found) => found
+      case _ => { return Err("each api rule must be an object") }
+    }
+    let include = Meta.get(&entry, "include") != None
+    let body = Meta.fieldsOf(&entry, if include { "include" } else { "exclude" })
+    let written = Meta.textOr(&body, "uidRegex", "")
+    if written.isEmpty() { return Err("each api rule needs a uidRegex under include or exclude") }
+    let pattern = match Regex.compile(written) {
+      case Ok(found) => found
+      case Err(problem) => { return Err("uidRegex " + written + ": " + Regex.explain(&problem)) }
+    }
+    result = result.push(Rule{include: include, pattern: pattern, kind: Meta.textOr(&body, "type", "").toLower()})
+  }
+  Ok(result)
+}
+
+/// Declarations kept for publication: exported ones unless private ones are asked for, whose
+/// identity matches an include pattern when any is given and no exclude pattern.
+export fn select(units: &Array[Model.Unit], options: &Options) -> Array[Model.Unit] {
+  var result: Array[Model.Unit] = []
+  for unit in List.sortOn(units, |held: Model.Unit| held.uid) {
+    if !wanted(options, unit.uid) { continue }
+    if !ruled(options, unit.uid, "module") { continue }
+    let members = unit.members.filter(|member: Model.Member| (member.exported || options.includePrivate) && wanted(options, member.uid) && ruled(options, member.uid, member.kind))
+    let kept = Model.Unit{..unit, members: members.map(fn(member: Model.Member) -> Model.Member {
+          let inner = member.members.filter(|held: Model.Member| wanted(options, held.uid) && ruled(options, held.uid, held.kind))
+          let ordered = if options.alphabetic && member.kind == "union" { List.sortOn(&inner, |held: Model.Member| held.name) } else { inner }
+          Model.Member{..member, members: ordered}
+        }) }
+    if !kept.members.isEmpty() || !kept.doc.isEmpty() { result = result.push(kept) }
+  }
+  result
+}
+
+/// The published path of a module or type page.
+export fn pageOf(options: &Options, uid: Str) -> Str {
+  if options.dest.isEmpty() { uid + ".html" } else { options.dest + "/" + uid + ".html" }
+}
+
+/// Identities of every module, declaration, field, variant, and method with its destination.
+/// Modules and types have pages; functions and constants are sections of their module page,
+/// and fields, variants, and methods sections of their type page.
+export fn references(units: &Array[Model.Unit], options: &Options) -> Array[Docgen.Reference] {
+  var result: Array[Docgen.Reference] = []
+  for unit in *units {
+    let modulePage = pageOf(options, unit.uid)
+    result = result.push(Docgen.Reference{uid: unit.uid, name: lastName(unit.uid), fullName: unit.uid, href: modulePage, kind: "module"})
+    for member in unit.members {
+      let typed = Model.isType(member.kind)
+      let href = if typed || options.separate { pageOf(options, member.uid) } else { modulePage + "#" + member.name }
+      result = result.push(Docgen.Reference{uid: member.uid, name: member.name, fullName: member.uid, href: href, kind: member.kind})
+      if typed {
+        for inner in member.members {
+          result = result.push(Docgen.Reference{uid: inner.uid, name: inner.name, fullName: inner.uid, href: pageOf(options, member.uid) + "#" + inner.name, kind: inner.kind})
+        }
+      }
+    }
+  }
+  result
+}
+
+/// Navigation of modules, each listing its types and traits, and its functions and constants
+/// when they have pages of their own. Items carry the identity they link to. Nested navigation groups modules under the modules
+/// their names extend.
+export fn toc(units: &Array[Model.Unit], options: &Options) -> Array[Docgen.TocItem] {
+  let flat = units.map(fn(unit: Model.Unit) -> Docgen.TocItem {
+      let shown = unit.members.filter(|member: Model.Member| Model.isType(member.kind) || options.separate)
+      let ordered = List.sortOn(&shown, |held: Model.Member| held.name)
+      let entry = |member: Model.Member| Docgen.TocItem{title: member.name, href: pageOf(options, member.uid), uid: member.uid, expanded: false, children: []}
+      var children: Array[Docgen.TocItem] = []
+      if options.categories == "none" { children = ordered.map(entry) } else {
+        for (heading, kinds) in CATEGORIES {
+          let group = ordered.filter(|member: Model.Member| kinds.contains(member.kind)).map(entry)
+          if !group.isEmpty() {
+            children = if options.categories == "nested" { children.push(Docgen.TocItem{title: heading, href: "", uid: "", expanded: false, children: group}) } else { children.push(Docgen.TocItem{title: heading, href: "", uid: "", expanded: false, children: []}).concat(group) }
+          }
+        }
+      }
+      Docgen.TocItem{title: unit.uid, href: pageOf(options, unit.uid), uid: unit.uid, expanded: false, children: children}
+    })
+  if options.nested { nest(&flat, "") } else { flat }
+}
+
+/// Module items placed under the item of the longest module name they extend, titled by
+/// their last segment; prefixes with no module of their own become groups.
+fn nest(flat: &Array[Docgen.TocItem], prefix: Str) -> Array[Docgen.TocItem] {
+  var heads: Array[Str] = []
+  for item in *flat {
+    let rest = if prefix.isEmpty() { item.uid } else if item.uid.startsWith(prefix + ".") { item.uid.drop(prefix.length() + 1) } else { "" }
+    if !rest.isEmpty() && !heads.contains(rest.split(".")[0]) { heads = heads.push(rest.split(".")[0]) }
+  }
+  heads.map(fn(head: Str) -> Docgen.TocItem {
+      let full = if prefix.isEmpty() { head } else { prefix + "." + head }
+      let below = nest(flat, full)
+      var own = Docgen.TocItem{title: head, href: "", uid: "", expanded: false, children: []}
+      for item in *flat {
+        if item.uid == full { own = Docgen.TocItem{..item, title: head} }
+      }
+      Docgen.TocItem{..own, children: below.concat(own.children)}
+    })
+}
+
+/// A browser link to a declaration's source line, or the empty text without a pattern.
+/// The pattern names `\{path\}` and `\{line\}`.
+export fn sourceLink(options: &Options, path: Str, line: Int) -> Str {
+  if options.sourceUrl.isEmpty() || Glob.matchesAny(&options.sourceExclude, path) { "" } else { options.sourceUrl.replace("\{path\}", path).replace("\{line\}", show(line)) }
+}
+
+/// The last dotted segment of an identity.
+export fn lastName(uid: Str) -> Str {
+  let parts = uid.split(".")
+  parts[parts.length() - 1]
+}
+
+/// Whether the first filter rule matching an identity and kind includes it; an identity no
+/// rule matches is included.
+fn ruled(options: &Options, uid: Str, kind: Str) -> Bool {
+  let family = if kind == "module" { "module" } else if Model.isType(kind) { "type" } else { kind }
+  for rule in options.rules {
+    let fits = rule.kind.isEmpty() || rule.kind == family || (rule.kind == "member" && family != "module" && family != "type")
+    if fits && Regex.isMatch(&rule.pattern, uid) { return rule.include }
+  }
+  true
+}
+
+/// Whether an identity passes the include and exclude patterns; a module is kept while any
+/// include pattern reaches inside it.
+fn wanted(options: &Options, uid: Str) -> Bool {
+  let inside = !options.include.filter(|pattern: Str| pattern.startsWith(uid + ".")).isEmpty()
+  if !options.include.isEmpty() && !Glob.matchesAny(&options.include, uid) && !inside { return false }
+  !Glob.matchesAny(&options.exclude, uid)
+}

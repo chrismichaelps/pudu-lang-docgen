@@ -1,0 +1,131 @@
+/** @Docgen.Configuration.Fields — typed reads of configuration values with exact failures */
+module PuduLangDocgen.Configuration.Fields
+
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Configuration.Reader — the configuration file and the object being read */
+export type Reader = { file: Str, at: Str, fields: Array[(Str, Docgen.Meta)] }
+
+/// A configuration failure naming the dotted location of the value.
+export fn failure(reader: &Reader, key: Str, message: Str) -> Docgen.Diagnostic {
+  let place = if reader.at.isEmpty() { key } else if key.isEmpty() { reader.at } else { reader.at + "." + key }
+  Docgen.error(Codes.CONFIG_INVALID, reader.file, 1, (if place.isEmpty() { "" } else { place + ": " }) + message)
+}
+
+/// Every key of an object is one of the allowed names.
+export fn only(reader: &Reader, allowed: &Array[Str]) -> Result[(), Docgen.Diagnostic] {
+  for (key, _value) in reader.fields {
+    if !allowed.contains(key) { return Err(failure(reader, key, "unknown option")) }
+  }
+  Ok(())
+}
+
+/// A reader for the object stored under a key; a missing key reads as empty.
+export fn nested(reader: &Reader, key: Str) -> Result[Reader, Docgen.Diagnostic] {
+  let place = if reader.at.isEmpty() { key } else { reader.at + "." + key }
+  match Meta.get(&reader.fields, key) {
+    case Some(Docgen.Fields(found)) => Ok(Reader{file: reader.file, at: place, fields: found})
+    case Some(Docgen.Nothing) => Ok(Reader{file: reader.file, at: place, fields: []})
+    case None => Ok(Reader{file: reader.file, at: place, fields: []})
+    case _ => Err(failure(reader, key, "must be an object"))
+  }
+}
+
+/// Text under a key, or the fallback when it is missing.
+export fn text(reader: &Reader, key: Str, fallback: Str) -> Result[Str, Docgen.Diagnostic] {
+  match Meta.get(&reader.fields, key) {
+    case Some(Docgen.Text(found)) => Ok(found)
+    case Some(Docgen.Whole(count)) => Ok(show(count))
+    case Some(Docgen.Nothing) => Ok(fallback)
+    case None => Ok(fallback)
+    case _ => Err(failure(reader, key, "must be text"))
+  }
+}
+
+/// A flag under a key, or the fallback when it is missing.
+export fn flag(reader: &Reader, key: Str, fallback: Bool) -> Result[Bool, Docgen.Diagnostic] {
+  match Meta.get(&reader.fields, key) {
+    case Some(Docgen.Flag(found)) => Ok(found)
+    case Some(Docgen.Nothing) => Ok(fallback)
+    case None => Ok(fallback)
+    case _ => Err(failure(reader, key, "must be true or false"))
+  }
+}
+
+/// A list of text under a key; a single text counts as a list of one.
+export fn texts(reader: &Reader, key: Str) -> Result[Array[Str], Docgen.Diagnostic] {
+  match Meta.get(&reader.fields, key) {
+    case Some(Docgen.Text(found)) => Ok([found])
+    case Some(Docgen.Items(listed)) => {
+      var result: Array[Str] = []
+      for held in listed {
+        match held {
+          case Docgen.Text(found) => { result = result.push(found) }
+          case _ => { return Err(failure(reader, key, "must list text values")) }
+        }
+      }
+      Ok(result)
+    }
+    case Some(Docgen.Nothing) => Ok([])
+    case None => Ok([])
+    case _ => Err(failure(reader, key, "must be text or a list of text"))
+  }
+}
+
+/// Readers for each object of a list under a key; a single object counts as a list of one.
+export fn objects(reader: &Reader, key: Str) -> Result[Array[Reader], Docgen.Diagnostic] {
+  let place = if reader.at.isEmpty() { key } else { reader.at + "." + key }
+  match Meta.get(&reader.fields, key) {
+    case Some(Docgen.Fields(found)) => Ok([Reader{file: reader.file, at: place, fields: found}])
+    case Some(Docgen.Items(listed)) => {
+      var result: Array[Reader] = []
+      var index = 0
+      for held in listed {
+        match held {
+          case Docgen.Fields(found) => { result = result.push(Reader{file: reader.file, at: place + "[" + show(index) + "]", fields: found}) }
+          case _ => { return Err(failure(reader, key, "must list objects")) }
+        }
+        index = index + 1
+      }
+      Ok(result)
+    }
+    case Some(Docgen.Nothing) => Ok([])
+    case None => Ok([])
+    case _ => Err(failure(reader, key, "must be an object or a list of objects"))
+  }
+}
+
+/// A relative directory under a key: empty for the configuration folder, never leaving it.
+export fn directory(reader: &Reader, key: Str, fallback: Str) -> Result[Str, Docgen.Diagnostic] {
+  let written = text(reader, key, fallback) ?
+  let trimmed = if written.endsWith("/") { written.take(written.length() - 1) } else { written }
+  if trimmed.isEmpty() || trimmed == "." { return Ok("") }
+  let cleaned = if trimmed.startsWith("./") { trimmed.drop(2) } else { trimmed }
+  if !Paths.relative(cleaned) { return Err(failure(reader, key, "must be a relative folder inside the project: " + written)) }
+  Ok(cleaned)
+}
+
+/// Longest run of leading `../` segments a source folder may have.
+const MAX_ASCENT: Int = 8
+
+/// A relative folder under a key that may start above the configuration folder with `../`
+/// segments; the rest must be a portable relative path.
+export fn sourceFolder(reader: &Reader, key: Str, fallback: Str) -> Result[Str, Docgen.Diagnostic] {
+  let written = text(reader, key, fallback) ?
+  var rest = if written.endsWith("/") { written.take(written.length() - 1) } else { written }
+  if rest.startsWith("./") { rest = rest.drop(2) }
+  var ascent = 0
+  while rest == ".." || rest.startsWith("../") {
+    ascent = ascent + 1
+    rest = if rest == ".." { "" } else { rest.drop(3) }
+  }
+  if ascent > MAX_ASCENT { return Err(failure(reader, key, "leads more than " + show(MAX_ASCENT) + " folders above the project: " + written)) }
+  if !rest.isEmpty() && rest != "." && !Paths.relative(rest) { return Err(failure(reader, key, "must be a relative folder: " + written)) }
+  var parts: Array[Str] = []
+  for _step in 0..ascent { parts = parts.push("..") }
+  if !rest.isEmpty() && rest != "." { parts = parts.push(rest) }
+  Ok(parts.join("/"))
+}

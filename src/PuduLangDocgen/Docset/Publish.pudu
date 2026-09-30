@@ -1,0 +1,152 @@
+/** @Docgen.Docset.Publish — confined, incremental writing of a validated plan */
+module PuduLangDocgen.Docset.Publish
+
+import Std.Bytes as Bytes
+import Std.Crypto as Crypto
+import Std.Fs as Fs
+import Std.Io as Io
+import Std.Json as Json
+import Std.Map as Map
+import Std.Path as Path
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+
+/// Writes a plan under an output folder. Files whose content matches the previous build's
+/// record are left untouched unless `force` is set; files the previous build wrote that this
+/// plan no longer has are removed. The record is kept in the `state` file.
+export fn publish(root: Str, plan: &Docgen.Plan, state: Str, force: Bool) -> Result[Docgen.Report, Array[Docgen.Diagnostic]] {
+  let folder = safe(root) ?
+  let previous = recorded(state)
+  var hashes: Array[(Str, Docgen.Meta)] = []
+  var written: Array[Str] = []
+  var unchanged: Array[Str] = []
+  var planned: Array[Str] = []
+  for artifact in plan.artifacts {
+    let hash = Crypto.sha256Hex(artifact.content)
+    let target = safe(Path.join(folder, artifact.path)) ?
+    planned = planned.push(artifact.path)
+    hashes = hashes.push((artifact.path, Docgen.Text(hash)))
+    if !force && Map.getOr(&previous, artifact.path, "") == hash && Io.exists(target) {
+      unchanged = unchanged.push(artifact.path)
+      continue
+    }
+    place(target, artifact.content) ?
+    written = written.push(artifact.path)
+  }
+  for resource in plan.resources {
+    let hash = Bytes.encodeHex(&Crypto.sha512(&resource.content))
+    let target = safe(Path.join(folder, resource.path)) ?
+    planned = planned.push(resource.path)
+    hashes = hashes.push((resource.path, Docgen.Text(hash)))
+    if !force && Map.getOr(&previous, resource.path, "") == hash && Io.exists(target) {
+      unchanged = unchanged.push(resource.path)
+      continue
+    }
+    placeBytes(target, &resource.content) ?
+    written = written.push(resource.path)
+  }
+  var removed: Array[Str] = []
+  for path in Map.keys(&previous) {
+    if planned.contains(path) { continue }
+    let target = match safe(Path.join(folder, path)) {
+      case Ok(found) => found
+      case Err(_) => { continue }
+    }
+    if Io.exists(target) {
+      match Io.remove(target) {
+        case Ok(_) => { removed = removed.push(path) }
+        case Err(_) => {}
+      }
+    }
+  }
+  let record = Json.encodePretty(&Json.object(&[("files", Meta.toJson(&Docgen.Fields(hashes)))]))
+  place(state, record) ?
+  Ok(Docgen.Report{written: written, unchanged: unchanged, removed: removed, diagnostics: plan.diagnostics})
+}
+
+/// A text file replaced in one step: written beside its target with the usual file mode, then
+/// renamed over it, so readers never see a partial file. The folder is created when missing.
+export fn place(path: Str, text: Str) -> Result[(), Array[Docgen.Diagnostic]] {
+  ready(path) ?
+  let staging = path + ".docgen-partial"
+  match Io.write(staging, text) {
+    case Ok(_) => {}
+    case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, path, 1, reason)]) }
+  }
+  settle(staging, path)
+}
+
+/// A binary file replaced in one step, like `place`.
+export fn placeBytes(path: Str, content: &Bytes) -> Result[(), Array[Docgen.Diagnostic]] {
+  ready(path) ?
+  let staging = path + ".docgen-partial"
+  match Io.writeAllBytes(staging, content) {
+    case Ok(_) => {}
+    case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, path, 1, show(reason))]) }
+  }
+  settle(staging, path)
+}
+
+/// A staged file moved over its target.
+fn settle(staging: Str, path: Str) -> Result[(), Array[Docgen.Diagnostic]] {
+  match Fs.rename(staging, path) {
+    case Ok(_) => Ok(())
+    case Err(reason) => {
+      let _cleaned = Io.remove(staging)
+      Err([Docgen.error(Codes.PUBLISH_FAILED, path, 1, show(reason))])
+    }
+  }
+}
+
+/// Hashes recorded by the previous build; a missing or unreadable record means none.
+fn recorded(state: Str) -> Map[Str, Str] {
+  let text = match Io.read(state) {
+    case Ok(found) => found
+    case Err(_) => { return mapOf([]) }
+  }
+  match Json.decode(text) {
+    case Ok(found) => {
+      var pairs: Array[(Str, Str)] = []
+      match Meta.fromJson(&found) {
+        case Docgen.Fields(fields) => {
+          for (path, value) in Meta.fieldsOf(&fields, "files") {
+            match value {
+              case Docgen.Text(hash) => { pairs = pairs.push((path, hash)) }
+              case _ => {}
+            }
+          }
+        }
+        case _ => {}
+      }
+      mapOf(pairs)
+    }
+    case Err(_) => mapOf([])
+  }
+}
+
+/// A path whose existing ancestors are folders and none of them symbolic links.
+fn safe(path: Str) -> Result[Str, Array[Docgen.Diagnostic]] {
+  let normalized = Path.normalize(path)
+  let chain = Path.ancestors(normalized).reverse().push(normalized)
+  for part in chain {
+    if Io.exists(part) {
+      match Fs.metadata(part) {
+        case Ok(details) => {
+          if details.isSymbolicLink { return Err([Docgen.error(Codes.PUBLISH_FAILED, part, 1, "symbolic links are not followed when publishing")]) }
+          if part != normalized && !details.isDirectory { return Err([Docgen.error(Codes.PUBLISH_FAILED, part, 1, "a file stands where a folder is needed")]) }
+        }
+        case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, part, 1, show(reason))]) }
+      }
+    }
+  }
+  Ok(normalized)
+}
+
+/// The folder of a file created when missing.
+fn ready(path: Str) -> Result[(), Array[Docgen.Diagnostic]] {
+  match Io.makeDirectory(Path.directoryOf(path)) {
+    case Ok(_) => Ok(())
+    case Err(reason) => Err([Docgen.error(Codes.PUBLISH_FAILED, path, 1, reason)])
+  }
+}

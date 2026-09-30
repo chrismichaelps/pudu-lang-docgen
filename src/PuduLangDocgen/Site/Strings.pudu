@@ -1,0 +1,37 @@
+/** @Docgen.Site.Strings — interface text of the default layout by language */
+module PuduLangDocgen.Site.Strings
+
+import Std.Map as Map
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+
+/// Interface text keys in the order the layout uses them.
+const KEYS: Array[Str] = ["skip", "menu", "primary", "search", "theme", "contents", "filter", "breadcrumb", "updated", "edit", "pager", "previous", "next", "inThisArticle", "pdf", "footer"]
+
+/// Interface text by primary language subtag, in the order of `KEYS`.
+const TABLES: Map[Str, Array[Str]] = mapOf([
+    ("en", ["Skip to main content", "Table of contents", "Primary", "Search", "Color theme", "Table of contents", "Filter by title", "Breadcrumb", "Last updated on", "Edit this page", "Pages", "Previous", "Next", "In this article", "Download PDF", "Footer"]),
+    ("es", ["Ir al contenido principal", "Tabla de contenido", "Principal", "Buscar", "Tema de color", "Tabla de contenido", "Filtrar por título", "Ruta de navegación", "Última actualización el", "Editar esta página", "Páginas", "Anterior", "Siguiente", "En este artículo", "Descargar PDF", "Pie de página"]),
+    ("fr", ["Aller au contenu principal", "Table des matières", "Principal", "Rechercher", "Thème de couleur", "Table des matières", "Filtrer par titre", "Fil d’Ariane", "Dernière mise à jour le", "Modifier cette page", "Pages", "Précédent", "Suivant", "Dans cet article", "Télécharger le PDF", "Pied de page"]),
+    ("de", ["Zum Hauptinhalt springen", "Inhaltsverzeichnis", "Hauptnavigation", "Suchen", "Farbschema", "Inhaltsverzeichnis", "Nach Titel filtern", "Navigationspfad", "Zuletzt aktualisiert am", "Diese Seite bearbeiten", "Seiten", "Zurück", "Weiter", "In diesem Artikel", "PDF herunterladen", "Fußzeile"]),
+    ("pt", ["Ir para o conteúdo principal", "Sumário", "Principal", "Pesquisar", "Tema de cores", "Sumário", "Filtrar por título", "Trilha de navegação", "Última atualização em", "Editar esta página", "Páginas", "Anterior", "Próximo", "Neste artigo", "Baixar PDF", "Rodapé"]),
+    ("it", ["Vai al contenuto principale", "Sommario", "Principale", "Cerca", "Tema colore", "Sommario", "Filtra per titolo", "Percorso", "Ultimo aggiornamento il", "Modifica questa pagina", "Pagine", "Precedente", "Successivo", "In questo articolo", "Scarica PDF", "Piè di pagina"]),
+    ("ja", ["メイン コンテンツにスキップ", "目次", "メイン", "検索", "カラー テーマ", "目次", "タイトルでフィルター", "階層リンク", "最終更新日", "このページを編集", "ページ", "前へ", "次へ", "この記事の内容", "PDF のダウンロード", "フッター"]),
+    ("zh", ["跳转至主内容", "目录", "主导航", "搜索", "颜色主题", "目录", "按标题筛选", "痕迹导航", "上次更新时间", "编辑此页", "页面", "上一页", "下一页", "本文内容", "下载 PDF", "页脚"]),
+    ("ko", ["주 콘텐츠로 건너뛰기", "목차", "기본", "검색", "색 테마", "목차", "제목으로 필터링", "이동 경로", "마지막 업데이트 날짜", "이 페이지 편집", "페이지", "이전", "다음", "이 문서의 내용", "PDF 다운로드", "바닥글"])
+  ])
+
+/// Interface text for a language tag with `_text` overrides from metadata applied.
+/// Unknown languages use English.
+export fn forLanguage(tag: Str, overrides: &Array[(Str, Docgen.Meta)]) -> Docgen.Meta {
+  let primary = tag.split("-")[0].toLower()
+  let table = Map.getOr(&TABLES, primary, Map.getOr(&TABLES, "en", []))
+  var fields: Array[(Str, Docgen.Meta)] = []
+  var index = 0
+  for key in KEYS {
+    let written = Meta.textOr(overrides, key, if index < table.length() { table[index] } else { key })
+    fields = fields.push((key, Docgen.Text(written)))
+    index = index + 1
+  }
+  Docgen.Fields(fields)
+}

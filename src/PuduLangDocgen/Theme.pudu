@@ -1,0 +1,46 @@
+/** @Docgen.Theme.Module — the default site look combined with template folder overrides */
+module PuduLangDocgen.Theme
+
+import Std.Map as Map
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Template as Template
+import PuduLangDocgen.Theme.Layout as Layout
+import PuduLangDocgen.Theme.Script as Script
+import PuduLangDocgen.Theme.Style as Style
+
+/** @Docgen.Theme.Look — parsed layout and partials ready to render pages */
+export type Look = { layout: Array[Template.Node], partials: Map[Str, Array[Template.Node]] }
+
+/// The stylesheet and script every site publishes.
+export fn assets() -> Array[Docgen.Artifact] {
+  [Docgen.Artifact{path: "_assets/site.css", content: Style.stylesheet()}, Docgen.Artifact{path: "_assets/site.js", content: Script.script()}]
+}
+
+/// The default templates with overrides applied. An override named `layout.html` replaces the
+/// layout and `partials/<name>.html` replaces or adds a partial; other files are ignored.
+/// Every template is parsed, and each one that does not parse is reported.
+export fn load(overrides: &Array[(Str, Str)]) -> Result[Look, Array[Docgen.Diagnostic]] {
+  var texts: Map[Str, Str] = mapOf(Layout.templates())
+  for (path, text) in *overrides {
+    if path.endsWith(".html") && (path == "layout.html" || path.startsWith("partials/")) {
+      texts = Map.insert(&texts, path.take(path.length() - 5), text)
+    }
+  }
+  var problems: Array[Docgen.Diagnostic] = []
+  var layout: Array[Template.Node] = []
+  var partials: Map[Str, Array[Template.Node]] = mapOf([])
+  for (name, text) in Map.pairs(&texts) {
+    match Template.parse(text) {
+      case Ok(nodes) => {
+        if name == "layout" { layout = nodes } else { partials = Map.insert(&partials, name.drop(9), nodes) }
+      }
+      case Err(reason) => { problems = problems.push(Docgen.error(Codes.TEMPLATE_INVALID, name + ".html", 1, reason)) }
+    }
+  }
+  if !problems.isEmpty() { return Err(problems) }
+  Ok(Look{layout: layout, partials: partials})
+}
+
+/// A page rendered through the layout with its view metadata.
+export fn page(look: &Look, view: &Docgen.Meta) -> Str { Template.render(&look.layout, view, &look.partials) }

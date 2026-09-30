@@ -1,0 +1,66 @@
+### YamlMime:Dashboard
+title: Templates
+description: |
+  Templates decide how every page looks. The templates below are built into pudu-lang-docgen
+  and are selected by name in `build.template`. Template folders of your own are listed after
+  them to override partials and add styles; see [Templates and theming](../guides/templates.md).
+items:
+- name: default
+  description: |
+    The standard look: a responsive layout with light, dark, and automatic color themes, a
+    header with search, a filterable sidebar, breadcrumbs, an article outline, previous and
+    next links, and print styles. Its layout and partials can be exported and overridden.
+  type: Template
+  author: Chris Michael
+  version: 0.1.0
+  license: Apache-2.0
+  thumbnail: ../images/pudu-lang-short.png
+  homepage: ../guides/templates.html
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Theme/Layout.pudu
+  usage:
+    config: '"template": ["default", "template"]'
+    command: docgen template export template
+- name: modern
+  description: |
+    Another name for `default`, accepted so that configurations that name it keep working.
+    It renders exactly like `default`.
+  type: Template
+  author: Chris Michael
+  version: 0.1.0
+  license: Apache-2.0
+  thumbnail: ../images/pudu-lang-short.png
+  homepage: ../guides/commands/template.html
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen
+  usage:
+    config: '"template": ["modern"]'
+    command: docgen template list
+- name: rest.tagpage
+  description: |
+    A template extension for HTTP API reference. Each OpenAPI description is published as an
+    overview page with servers, an operation index, and schemas, plus one page per tag.
+  type: Template extension
+  author: Chris Michael
+  version: 0.1.0
+  license: Apache-2.0
+  thumbnail: ../images/pudu-lang-short.png
+  homepage: ../guides/http-api.html#splitting-large-services
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Rest/Pages.pudu
+  usage:
+    config: '"template": ["default", "rest.tagpage"]'
+- name: rest.operationpage
+  description: |
+    A template extension for HTTP API reference that publishes one page per operation. Combine
+    it with `rest.tagpage` for tag pages that link to operation pages.
+  type: Template extension
+  author: Chris Michael
+  version: 0.1.0
+  license: Apache-2.0
+  thumbnail: ../images/pudu-lang-short.png
+  homepage: ../guides/http-api.html#splitting-large-services
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Rest/Pages.pudu
+  usage:
+    config: '"template": ["default", "rest.tagpage", "rest.operationpage"]'

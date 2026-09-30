@@ -1,0 +1,90 @@
+/** @Docgen.Markdown.Sanitize — raw HTML reduced to inert allowed elements */
+module PuduLangDocgen.Markdown.Sanitize
+
+import Std.Char as Char
+import Std.Set as Set
+import PuduLangDocgen.Markdown.Directives as Directives
+import PuduLangDocgen.Paths as Paths
+
+/// Elements kept from raw HTML; any other tag is shown as text.
+const ELEMENTS: Set[Str] = setOf([
+    "a", "abbr", "article", "aside", "b", "blockquote", "br", "caption", "center", "cite", "code", "col",
+    "colgroup", "dd", "del", "details", "dfn", "div", "dl", "dt", "em", "figcaption", "figure", "footer",
+    "h1", "h2", "h3", "h4", "h5", "h6", "header", "hr", "i", "img", "ins", "kbd", "li", "mark", "nav", "ol",
+    "p", "pre", "q", "s", "samp", "section", "small", "span", "strong", "sub", "summary", "sup", "table",
+    "tbody", "td", "tfoot", "th", "thead", "tr", "u", "ul", "var", "wbr"
+  ])
+
+/// Attributes kept on allowed elements; `href` and `src` must also be safe destinations.
+const ATTRIBUTES: Set[Str] = setOf([
+    "class", "id", "title", "align", "colspan", "rowspan", "open", "alt", "width", "height", "src", "href",
+    "lang", "dir", "start", "type", "scope", "aria-label", "aria-hidden", "role", "name", "target"
+  ])
+
+/// Raw HTML with allowed elements rebuilt from their allowed attributes.
+/// Other tags, scripts, styles, and event handlers are escaped into visible text.
+export fn clean(html: Str) -> Str {
+  let cs = html.chars()
+  var pieces: Array[Str] = []
+  var index = 0
+  while index < cs.length() {
+    let character = cs[index]
+    if character != '<' {
+      pieces = pieces.push(if character == '>' { "&gt;" } else if character == '"' { "&quot;" } else { character.toText() })
+      index = index + 1
+      continue
+    }
+    var close = index + 1
+    var quote = ' '
+    while close < cs.length() && (cs[close] != '>' || quote != ' ') {
+      if (cs[close] == '"' || cs[close] == '\'') && quote == ' ' { quote = cs[close] } else if cs[close] == quote { quote = ' ' }
+      close = close + 1
+    }
+    if close >= cs.length() {
+      pieces = pieces.push("&lt;")
+      index = index + 1
+      continue
+    }
+    let inner = slice(&cs, index + 1, close)
+    if inner.startsWith("!--") && inner.endsWith("--") {
+      index = close + 1
+      continue
+    }
+    pieces = pieces.push(element(inner))
+    index = close + 1
+  }
+  pieces.join("")
+}
+
+/// One tag rebuilt, or escaped when it is not allowed.
+fn element(inner: Str) -> Str {
+  let closing = inner.startsWith("/")
+  let body = if closing { inner.drop(1) } else { inner }
+  let cs = body.chars()
+  var end = 0
+  while end < cs.length() && (Char.isAlphanumeric(cs[end]) || cs[end] == '-') { end = end + 1 }
+  let name = body.take(end).toLower()
+  if name.isEmpty() || !Set.contains(&ELEMENTS, name) { return "&lt;" + Paths.escape(inner) + "&gt;" }
+  if closing { return "</" + name + ">" }
+  var kept: Array[Str] = []
+  var external = false
+  let rest = body.drop(end)
+  let selfClosing = rest.trim().endsWith("/")
+  for (key, value) in Directives.attributes(if selfClosing { rest.trim().take(rest.trim().length() - 1) } else { rest }) {
+    let lowered = key.toLower()
+    if Set.contains(&ATTRIBUTES, lowered) {
+      let safe = if lowered == "href" || lowered == "src" { Paths.href(value) } else { true }
+      if safe { kept = kept.push(" " + lowered + "=\"" + Paths.escape(value) + "\"") }
+      if lowered == "target" { external = true }
+    }
+  }
+  if external { kept = kept.push(" rel=\"noopener noreferrer\"") }
+  "<" + name + kept.join("") + ">"
+}
+
+/// Text of the characters in a half-open range.
+fn slice(cs: &Array[Char], from: Int, to: Int) -> Str {
+  var pieces: Array[Str] = []
+  for index in from..to { pieces = pieces.push(cs[index].toText()) }
+  pieces.join("")
+}

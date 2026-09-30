@@ -1,0 +1,128 @@
+/** @Docgen.Docset.Tests — projects load from disk and publish incrementally */
+module PuduLangDocgen.DocsetTest
+
+import Std.Bytes as Bytes
+import Std.Env as Env
+import Std.Fs as Fs
+import Std.Io as Io
+import Std.Path as Path
+import Std.Test as Test
+import PuduLangDocgen.Build as Build
+import PuduLangDocgen.Command.Arguments as Arguments
+import PuduLangDocgen.Command as Command
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Docset as Docset
+import PuduLangDocgen.Docset.Tasks as Tasks
+import PuduLangDocgen.Docset.Tools as Tools
+import PuduLangDocgen.Docset.Walk as Walk
+import PuduLangDocgen.Scaffold as Scaffold
+import PuduLangDocgen.Serve as Serve
+
+/// Files of the project written for these checks.
+const PROJECT: Array[(Str, Str)] = [
+  ("docgen.json", "\{\"build\": \{\"content\": [\{\"files\": [\"**/*.md\", \"**/toc.yml\"], \"src\": \"docs\"\}], \"resource\": [\{\"files\": \"*.png\", \"src\": \"docs\"\}]\}\}"),
+  ("docs/index.md", "# Home\n\n[!INCLUDE[note](shared/note.md)]\n\n![logo](logo.png)"),
+  ("docs/other.md", "# Other"),
+  ("docs/shared/note.md", "Shared note."),
+  ("docs/logo.png", "PNG"),
+  ("docs/.draft.md", "# Hidden")
+]
+
+/// Writes the project under a folder.
+fn write(root: Str) -> Bool {
+  for (path, text) in PROJECT {
+    let target = Path.join(root, path)
+    let _folder = Io.makeDirectory(Path.directoryOf(target))
+    match Io.write(target, text) {
+      case Ok(_) => {}
+      case Err(_) => { return false }
+    }
+  }
+  true
+}
+
+/// A build report, or an empty one with the failure codes as written paths.
+fn built(config: Str, chosen: &Docset.Options) -> Docgen.Report {
+  match Docset.build(config, chosen, &Build.extensions()) {
+    case Ok(report) => report
+    case Err(problems) => Docgen.Report{written: problems.map(|problem: Docgen.Diagnostic| problem.code + " " + problem.message), unchanged: [], removed: [], diagnostics: []}
+  }
+}
+
+/// Parsed command-line parts, or the refusal.
+fn parsed(arguments: Array[Str]) -> Str {
+  match Arguments.parse(&arguments) {
+    case Ok(found) => found.command + "|" + found.positional.join(",") + "|" + found.flags.join(",") + "|" + found.values.map(fn(entry: (Str, Str)) -> Str {
+        let (name, value) = entry
+        name + "=" + value
+      }).join(",")
+    case Err(reason) => reason
+  }
+}
+
+/// Runs every loading, publishing, command, and serving contract.
+fn main() -> Int {
+  let root = match Fs.temporaryDirectoryIn(Env.temporaryDirectory(), "docgen-test") {
+    case Ok(found) => found
+    case Err(_) => ""
+  }
+  let ready = !root.isEmpty() && write(root)
+  let config = Path.join(root, "docgen.json")
+  let quiet = Docset.Options{..Docset.options(), disableGitFeatures: true}
+  let first = built(config, &quiet)
+  let second = built(config, &quiet)
+  let forced = built(config, &Docset.Options{..quiet, force: true})
+  let _gone = Io.remove(Path.join(root, "docs/other.md"))
+  let third = built(config, &quiet)
+  let dry = built(config, &Docset.Options{..quiet, dryRun: true, output: "preview"})
+  let site = Path.join(root, "_site")
+  let checks = Test.suite("Docset", &[
+      Test.that("project written", ready),
+      Test.equals("first build writes everything", &first.written.length(), &11),
+      Test.equals("second build writes nothing", &(second.written, second.unchanged.length()), &([], 11)),
+      Test.equals("force rewrites", &forced.written.length(), &11),
+      Test.that("stale outputs removed", third.removed.contains("other.html") && !Io.exists(Path.join(site, "other.html"))),
+      Test.that("include resolved from disk", match Io.read(Path.join(site, "index.html")) { case Ok(text) => text.contains("Shared note.") case Err(_) => false }),
+      Test.that("resource copied", Io.exists(Path.join(site, "logo.png"))),
+      Test.that("hidden files skipped", match Walk.files(root, &[]) { case Ok(paths) => !paths.contains("docs/.draft.md") && paths.contains("docs/other.md") == false case Err(_) => false }),
+      Test.that("dry run writes nothing", dry.written.isEmpty() && !dry.unchanged.isEmpty() && !Io.exists(Path.join(root, "preview"))),
+      Test.equals("missing configuration", &built(Path.join(root, "none.json"), &quiet).written.length(), &1),
+      Test.that("state kept beside the configuration", Io.exists(Path.join(root, ".docgen/build.json"))),
+      Test.equals("command parsing", &[parsed(["build", "site", "-o", "out", "--force"]), parsed(["serve", "_site", "--port", "9000"]), parsed(["--dryRun"])], &["build|site|--force|--output=out", "serve|_site||--port=9000", "||--dryRun|"]),
+      Test.equals("command refusals", &[parsed(["--bogus"]), parsed(["build", "-o"]), parsed(["a", "b"])], &["unknown option --bogus", "option -o needs a value", "expected at most 1 path, found a b"]),
+      Test.equals("help and version", &[Command.run(&["help"]), Command.run(&["version"]), Command.run(&["--nope"])], &[0, 0, 2]),
+      Test.equals("request targets", &["/", "/guide/", "/a%20b.html", "/x.html?q=1", "/../secret", "/%zz"].map(|path: Str| Serve.target(path)), &[Some("index.html"), Some("guide/index.html"), Some("a b.html"), Some("x.html"), None, None]),
+      Test.equals("served pages", &[Serve.answer(site, "/index.html").status, Serve.answer(site, "/missing.html").status], &[200, 404]),
+      Test.that("not found page served", match Bytes.toText(&Serve.answer(site, "/missing.html").body) { case Ok(text) => text.contains("Page not found") case Err(_) => false }),
+      Test.equals("request lines", &["GET /index.html HTTP/1.1", "HEAD / HTTP/1.1", "POST / HTTP/1.1", "GET /", "", "GET / FTP/1"].map(|line: Str| Serve.reply(site, line).status), &[200, 200, 405, 400, 400, 400]),
+      Test.equals("media types", &[Serve.answer(site, "/index.html").media.startsWith("text/html"), Serve.answer(site, "/nowhere/").media.startsWith("text/html")], &[true, true]),
+      Test.that("response head", Serve.head(&Serve.Reply{status: 404, media: "text/plain", body: Bytes.fromText("abc")}) == "HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 3\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
+    ])
+  let fresh = Path.join(root, "fresh")
+  let created = match Tasks.init(fresh, &Scaffold.defaults("Fresh")) { case Ok(found) => found case Err(_) => [] }
+  let again = match Tasks.init(fresh, &Scaffold.defaults("Fresh")) { case Ok(_) => "created" case Err(found) => found[0].message }
+  let exported = match Tasks.exportTemplate(Path.join(root, "tpl")) { case Ok(found) => found.length() case Err(_) => 0 }
+  let merged = match Tasks.merge(&[Path.join(site, "xrefmap.yml"), Path.join(site, "xrefmap.yml")], Path.join(root, "all.yml")) { case Ok(count) => count case Err(_) => -1 }
+  let freshBuild = built(Path.join(fresh, "docgen.json"), &quiet)
+  let mode = match Fs.permissions(Path.join(site, "index.html")) { case Ok(found) => found.readable case Err(_) => false }
+  let (served, serviceProblems) = Tools.consult(&["http://127.0.0.1:1/xref?uid=\{uid\}"], &["A", "B"])
+  let extra = Test.suite("Docset tasks", &[
+      Test.equals("unreachable service answers nothing and is asked once", &(served, serviceProblems.map(|problem: Docgen.Diagnostic| (problem.code, problem.path))), &([], [(Codes.XREF_UNAVAILABLE, "http://127.0.0.1:1/xref?uid=\{uid\}")])),
+      Test.equals("no services asked without identities", &Tools.consult(&["http://127.0.0.1:1/\{uid\}"], &[]), &([], [])),
+      Test.equals("scaffold files", &created, &["docgen.json", "index.md", "toc.yml", "docs/introduction.md", "docs/getting-started.md", "docs/toc.yml", ".gitignore", "src/Example.pudu"]),
+      Test.equals("existing project refused", &again, &"a project already exists here"),
+      Test.equals("scaffold builds without warnings", &(freshBuild.written.length() > 10, freshBuild.diagnostics), &(true, [])),
+      Test.equals("template export", &exported, &14),
+      Test.equals("merge keeps each identity once", &merged, &0),
+      Test.that("published files readable", mode),
+      Test.that("no staging files left", !Io.exists(Path.join(site, "index.html.docgen-partial"))),
+      Test.equals("options with long names", &[parsed(["build", "-l", "log.json", "--logLevel", "warning", "--verbose", "--open-browser", "--theme", "dark", "-a"])], &["build||--verbose,--open-browser,--all|--log=log.json,--logLevel=warning,--theme=dark"]),
+      Test.equals("bad log level", &Command.run(&["build", "--logLevel", "loud"]), &2),
+      Test.equals("new commands parse", &[parsed(["init", "site", "--yes"]), parsed(["template", "export", "out"]), parsed(["merge", "a.yml", "b.yml", "-o", "c.yml"]), parsed(["pdf", "site"])], &["init|site|--yes|", "template|export,out||", "merge|a.yml,b.yml||--output=c.yml", "pdf|site||"])
+    ])
+  let _cleaned = Fs.removeTree(root)
+  let ran = Test.run(&Test.group("Docset", &[checks, extra]))
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

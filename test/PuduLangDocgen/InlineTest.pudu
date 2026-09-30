@@ -1,0 +1,69 @@
+/** @Docgen.Inline.Tests — phrasing trees, file mapping, overwrites, checks, YAML, and history */
+module PuduLangDocgen.InlineTest
+
+import Std.Io as Io
+import Std.Map as Map
+import Std.Test as Test
+import PuduLangDocgen.Build.Checks as Checks
+import PuduLangDocgen.Build.Overwrite as Overwrite
+import PuduLangDocgen.Build.Sources as Sources
+import PuduLangDocgen.Configuration as Configuration
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Inline as Inline
+import PuduLangDocgen.Markdown.Syntax as Syntax
+import PuduLangDocgen.Repository as Repository
+import PuduLangDocgen.Yaml as Yaml
+
+/// Inline nodes of text starting at line one without definitions.
+fn nodes(text: Str) -> Array[Syntax.Inline] { Inline.parse(text, &mapOf([]), 1) }
+
+/// A page with a body and links for checks.
+fn page(path: Str, body: Str, links: Array[Docgen.Link]) -> Docgen.Page {
+  Docgen.Page{path: path, source: path, kind: "article", title: path, uid: "", summary: "", body: body, headings: [], links: links, meta: []}
+}
+
+/// Codes an overwrite file reports.
+fn overwriteCodes(text: Str) -> Array[Str] {
+  let (_sections, problems) = Overwrite.parse("o.md", text)
+  problems.map(|problem: Docgen.Diagnostic| problem.code)
+}
+
+/// Runs every inline, mapping, overwrite, check, YAML, and history contract.
+fn main() -> Int {
+  let (sections, overwriteProblems) = Overwrite.parse("o.md", "---\nuid: A\nsummary: *content\ntitle: New\n---\nShort.\n\n---\nuid: B\n---\nMore.\n\n---\n- a list\n---\n")
+  let checks = Test.suite("Inline", &[
+      Test.equals("text and emphasis tree", &nodes("a *b*"), &[Syntax.Text("a "), Syntax.Emphasis([Syntax.Text("b")])]),
+      Test.equals("link line numbers", &nodes("x\n[a](b.md)"), &[Syntax.Text("x"), Syntax.SoftBreak, Syntax.Anchor(Syntax.Target{destination: "b.md", title: "", line: 2}, [Syntax.Text("a")])]),
+      Test.equals("angle destination with spaces", &nodes("[a](<b c.md>)"), &[Syntax.Anchor(Syntax.Target{destination: "b c.md", title: "", line: 1}, [Syntax.Text("a")])]),
+      Test.equals("balanced parentheses in destination", &nodes("[a](f(x).md)"), &[Syntax.Anchor(Syntax.Target{destination: "f(x).md", title: "", line: 1}, [Syntax.Text("a")])]),
+      Test.equals("unclosed bracket stays text", &nodes("[a"), &[Syntax.Text("[a")]),
+      Test.equals("quoted mention", &nodes("@\"A B\""), &[Syntax.Xref(Syntax.XrefSpan{uid: "A B", text: [], display: "name", line: 1, optional: true})]),
+      Test.equals("xref element", &nodes("<xref uid=\"A\" text=\"T\"/>"), &[Syntax.Xref(Syntax.XrefSpan{uid: "A", text: [Syntax.Text("T")], display: "name", line: 1, optional: false})]),
+      Test.equals("labels normalize", &Inline.label("  Foo\n  Bar "), &"foo bar"),
+      Test.equals("plain text", &Inline.plain(&nodes("**a** `b` [c](d) ![e](f)")), &"a b c e"),
+      Test.equals("deep nesting stays bounded", &Inline.plain(&nodes("*a **b *c* b** a*")), &"a b c b a"),
+      Test.equals("mapping with source and destination", &Sources.mapped(&[Configuration.Mapping{files: ["**/*.md"], exclude: ["drafts/**"], src: "docs", dest: "guide", meta: []}], &["docs/a.md", "docs/drafts/x.md", "readme.md", "_site/b.md", "docs/c.txt"], &["_site"]), &[("docs/a.md", "guide/a.md")]),
+      Test.equals("first mapping wins", &Sources.mapped(&[Configuration.Mapping{files: ["a.md"], exclude: [], src: "", dest: "one", meta: []}, Configuration.Mapping{files: ["*.md"], exclude: [], src: "", dest: "two", meta: []}], &["a.md", "b.md"], &[]), &[("a.md", "one/a.md"), ("b.md", "two/b.md")]),
+      Test.equals("overwrite sections", &sections.map(|section: Overwrite.Section| (section.uid, section.target, section.content)), &[("A", "summary", "Short."), ("B", "", "More.\n\n---\n- a list\n---")]),
+      Test.equals("overwrite metadata", &Overwrite.metaFor(&sections, "A"), &[("title", Docgen.Text("New"))]),
+      Test.equals("overwrite without uid", &overwriteCodes("---\ntitle: x\n---\n"), &[Codes.OVERWRITE_INVALID]),
+      Test.equals("no overwrite problems", &overwriteProblems, &[]),
+      Test.equals("anchors", &Checks.anchors("<h2 id=\"a\">x</h2><tr id=\"b&amp;c\">"), &["a", "b&c"]),
+      Test.equals("missing fragment", &Checks.fragments(&[page("a.html", "<h2 id=\"x\">", [Docgen.Link{target: "b.html#y", line: 3}]), page("b.html", "<h2 id=\"z\">", [])]).map(|problem: Docgen.Diagnostic| (problem.code, problem.line)), &[(Codes.FRAGMENT_MISSING, 3)]),
+      Test.equals("present fragment", &Checks.fragments(&[page("a.html", "", [Docgen.Link{target: "a.html#x", line: 1}]), page("b.html", "", [])]).length(), &1),
+      Test.equals("output collisions", &Checks.outputs(&["a.html", "A.html", "b", "b/c.html", "../x"]).map(|problem: Docgen.Diagnostic| problem.code), &[Codes.OUTPUT_COLLISION, Codes.OUTPUT_INVALID, Codes.OUTPUT_COLLISION]),
+      Test.equals("rules and strict mode", &Checks.ruled(&[Docgen.warning("A", "p", 1, "m"), Docgen.warning("B", "p", 1, "m"), Docgen.error("C", "p", 1, "m")], &[("A", "off"), ("C", "info")], true).map(|problem: Docgen.Diagnostic| (problem.code, problem.severity)), &[("B", Docgen.Error), ("C", Docgen.Information)]),
+      Test.equals("yaml writes and reads back", &Yaml.decode(Yaml.encode(&Docgen.Fields([("a", Docgen.Items([Docgen.Text("x: y"), Docgen.Whole(3), Docgen.Flag(false)])), ("b", Docgen.Text("one\n\ntwo"))]))), &Ok(Docgen.Fields([("a", Docgen.Items([Docgen.Text("x: y"), Docgen.Whole(3), Docgen.Flag(false)])), ("b", Docgen.Text("one\n\ntwo"))]))),
+      Test.equals("yaml scalars quoted when needed", &["plain", "a: b", "true", "12", "say \"hi\""].map(|text: Str| Yaml.scalar(text)), &["plain", "\"a: b\"", "\"true\"", "\"12\"", "'say \"hi\"'"]),
+      Test.equals("block scalars in list items", &Yaml.decode("- m: |\n    x\n\n    y\n- z"), &Ok(Docgen.Items([Docgen.Fields([("m", Docgen.Text("x\n\ny\n"))]), Docgen.Text("z")]))),
+      Test.equals("folded and stripped scalars", &Yaml.decode("a: >-\n  one\n  two\nb: x"), &Ok(Docgen.Fields([("a", Docgen.Text("one two")), ("b", Docgen.Text("x"))]))),
+      Test.equals("remote addresses normalized", &["git@github.com:o/r.git", "ssh://git@gitlab.com/o/r", "https://user:token@github.com/o/r.git/", "file:///x"].map(|remote: Str| Repository.normalize(remote)), &["https://github.com/o/r", "https://gitlab.com/o/r", "https://github.com/o/r", ""]),
+      Test.equals("environment overrides", &Repository.fromEnvironment(&[("GITHUB_REPOSITORY", "o/r"), ("GITHUB_REF_NAME", "main"), ("DOCGEN_SOURCE_BRANCH_NAME", "docs")]), &("https://github.com/o/r", "docs")),
+      Test.equals("other services", &[Repository.fromEnvironment(&[("CI_PROJECT_URL", "https://gitlab.com/o/r"), ("CI_COMMIT_REF_NAME", "dev")]), Repository.fromEnvironment(&[("GIT_URL", "git@bitbucket.org:o/r.git"), ("GIT_BRANCH", "origin/main")])], &[("https://gitlab.com/o/r", "dev"), ("https://bitbucket.org/o/r", "main")]),
+      Test.equals("history takes the newest date", &Map.pairs(&Repository.history("@2026-09-02\na.md\n\n@2026-08-01\na.md\nb.md\n")), &[("a.md", "2026-09-02"), ("b.md", "2026-08-01")])
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

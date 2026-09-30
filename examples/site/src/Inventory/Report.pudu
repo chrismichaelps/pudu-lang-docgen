@@ -1,0 +1,16 @@
+/** @Inventory.Report.Module — summaries of stock across items */
+module Inventory.Report
+
+import Inventory as Inventory
+
+/// Total units across items.
+export fn total(items: &Array[Inventory.Item]) -> Int {
+  var sum = 0
+  for item in *items { sum = sum + item.quantity }
+  sum
+}
+
+/// Items with no units on hand.
+export fn missing(items: &Array[Inventory.Item]) -> Array[Inventory.Item] {
+  items.filter(|item: Inventory.Item| item.quantity == 0)
+}

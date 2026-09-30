@@ -1,0 +1,45 @@
+/** @Docgen.Api.LexerTests — source boundaries, literals, and comments lex without loss */
+module PuduLangDocgen.ApiLexerTest
+
+import Std.Io as Io
+import Std.Test as Test
+import PuduLangDocgen.Api.Lexer as Lexer
+
+/// The texts of a source's tokens.
+fn texts(source: Str) -> Array[Str] { Lexer.tokens(source).map(|token: Lexer.Token| token.text) }
+
+/// The texts and lines of a source's tokens.
+fn placed(source: Str) -> Array[(Str, Int)] { Lexer.tokens(source).map(|token: Lexer.Token| (token.text, token.line)) }
+
+/// Runs every token boundary contract.
+fn main() -> Int {
+  let checks = Test.suite("Api lexer", &[
+      Test.equals("lines after comments and strings", &placed("a // c\n/* b\n c */ \"s\nt\" x"), &[("a", 1), ("\"s\nt\"", 3), ("x", 4)]),
+      Test.equals("kinds", &Lexer.tokens("w 7 \"s\" + /// d\n/** b */").map(|token: Lexer.Token| token.kind), &[Lexer.Word, Lexer.Literal, Lexer.Literal, Lexer.Symbol, Lexer.LineDoc, Lexer.BlockDoc]),
+      Test.equals("line comment at the end", &texts("x // c"), &["x"]),
+      Test.equals("bare comment marker at the end", &texts("x //"), &["x"]),
+      Test.equals("four slashes are no doc", &texts("//// not doc\nx"), &["x"]),
+      Test.equals("empty block is no doc", &texts("/**/ x"), &["x"]),
+      Test.equals("unclosed block comment", &texts("/* open"), &[]),
+      Test.equals("unclosed doc block", &texts("/** doc"), &["doc"]),
+      Test.equals("doc block lines", &texts("/**\n * one\n *\n * two\n */"), &["one\n\ntwo"]),
+      Test.equals("unclosed string", &texts("\"abc"), &["\"abc"]),
+      Test.equals("closing brace outside interpolation", &texts("\"a\}b\" x"), &["\"a\}b\"", "x"]),
+      Test.equals("escaped quote in string", &texts("\"a\\\"b\" x"), &["\"a\\\"b\"", "x"]),
+      Test.equals("character after a backslash", &texts("\\'y'"), &["\\", "'y'"]),
+      Test.equals("quoted word is not a character", &texts("'ab'"), &["'", "ab", "'"]),
+      Test.equals("quote after a word", &texts("ab'"), &["ab", "'"]),
+      Test.equals("lone quote", &texts("x ' y"), &["x", "'", "y"]),
+      Test.equals("quote at the end", &texts("x '"), &["x", "'"]),
+      Test.equals("escape at the end", &texts("'\\n"), &["'", "\\", "n"]),
+      Test.equals("escaped character", &texts("'\\n' x"), &["'\\n'", "x"]),
+      Test.equals("overlong escape", &texts("'\\u\{12345678\}'"), &["'", "\\", "u", "\{", "12345678", "\}", "'"]),
+      Test.equals("longest escape", &texts("'\\u\{1234567\}'"), &["'\\u\{1234567\}'"]),
+      Test.equals("operator pairs", &texts("a->b<=c"), &["a", "->", "b", "<=", "c"]),
+      Test.equals("symbol at the end", &texts("a-"), &["a", "-"]),
+      Test.equals("underscored words", &texts("_a1 b_2"), &["_a1", "b_2"])
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

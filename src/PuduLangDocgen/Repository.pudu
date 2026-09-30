@@ -1,0 +1,78 @@
+/** @Docgen.Repository.Module — source repository identity and file history from their raw forms */
+module PuduLangDocgen.Repository
+
+import Std.Map as Map
+
+/// Environment variables naming a repository address or a branch, in the order they are
+/// trusted: explicit overrides first, then continuous integration services.
+const BRANCH_VARIABLES: Array[Str] = [
+  "DOCGEN_SOURCE_BRANCH_NAME", "GITHUB_HEAD_REF", "GITHUB_REF_NAME", "CI_COMMIT_REF_NAME", "BUILD_SOURCEBRANCHNAME",
+  "APPVEYOR_REPO_BRANCH", "GIT_BRANCH", "TEAMCITY_BUILD_BRANCH"
+]
+
+/// A remote address as a browsable HTTPS address without credentials or `.git`.
+/// `git@host:owner/repo.git` and `ssh://git@host/owner/repo` both become `https://host/owner/repo`.
+export fn normalize(remote: Str) -> Str {
+  var address = remote.trim()
+  if address.isEmpty() { return "" }
+  if address.startsWith("git@") && address.contains(":") {
+    let rest = address.drop(4)
+    let colon = rest.indexOf(":")
+    address = "https://" + rest.take(colon) + "/" + rest.drop(colon + 1)
+  } else if address.startsWith("ssh://") {
+    let rest = address.drop(6)
+    let hostStart = if rest.contains("@") { rest.indexOf("@") + 1 } else { 0 }
+    address = "https://" + rest.drop(hostStart)
+  } else if address.startsWith("http://") || address.startsWith("https://") {
+    let scheme = if address.startsWith("https://") { "https://" } else { "http://" }
+    let rest = address.drop(scheme.length())
+    let slash = rest.indexOf("/")
+    let authority = if slash < 0 { rest } else { rest.take(slash) }
+    if authority.contains("@") {
+      let at = authority.split("@")
+      address = scheme + at[at.length() - 1] + rest.drop(authority.length())
+    }
+  } else { return "" }
+  if address.endsWith("/") { address = address.take(address.length() - 1) }
+  if address.endsWith(".git") { address = address.take(address.length() - 4) }
+  address
+}
+
+/// The repository address and branch environment variables name, when they name them.
+/// `DOCGEN_SOURCE_REPOSITORY_URL` and `DOCGEN_SOURCE_BRANCH_NAME` override every service.
+export fn fromEnvironment(variables: &Array[(Str, Str)]) -> (Str, Str) {
+  let found = mapOf(*variables)
+  var repo = Map.getOr(&found, "DOCGEN_SOURCE_REPOSITORY_URL", "")
+  if repo.isEmpty() {
+    let github = Map.getOr(&found, "GITHUB_REPOSITORY", "")
+    if !github.isEmpty() { repo = Map.getOr(&found, "GITHUB_SERVER_URL", "https://github.com") + "/" + github }
+  }
+  for name in ["CI_PROJECT_URL", "BUILD_REPOSITORY_URI", "GIT_URL"] {
+    if repo.isEmpty() { repo = Map.getOr(&found, name, "") }
+  }
+  if repo.isEmpty() {
+    let appveyor = Map.getOr(&found, "APPVEYOR_REPO_NAME", "")
+    let provider = Map.getOr(&found, "APPVEYOR_REPO_PROVIDER", "github")
+    if !appveyor.isEmpty() { repo = "https://" + (if provider == "gitLab" { "gitlab.com" } else if provider == "bitBucket" { "bitbucket.org" } else { "github.com" }) + "/" + appveyor }
+  }
+  var branch = ""
+  for name in BRANCH_VARIABLES {
+    if branch.isEmpty() { branch = Map.getOr(&found, name, "") }
+  }
+  if branch.startsWith("origin/") { branch = branch.drop(7) }
+  if branch.startsWith("refs/heads/") { branch = branch.drop(11) }
+  (normalize(repo), branch)
+}
+
+/// The latest change date of each file from log text that lists `@YYYY-MM-DD` lines followed
+/// by the files each change touched, newest first.
+export fn history(log: Str) -> Map[Str, Str] {
+  var found: Map[Str, Str] = mapOf([])
+  var date = ""
+  for line in log.split("\n") {
+    let held = line.trim()
+    if held.startsWith("@") { date = held.drop(1) }
+      else if !held.isEmpty() && !date.isEmpty() && !Map.containsKey(&found, held) { found = Map.insert(&found, held, date) }
+  }
+  found
+}

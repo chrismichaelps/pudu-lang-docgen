@@ -4,6 +4,8 @@
 - [[grammar/_MOC]] — the pinned Pudu grammar.
 - [[domain/_MOC]] — document, reference, and artifact vocabulary.
 - [[src/_MOC]] — implementation mirrors and contracts.
+- [[test/_MOC]] — suites and the contracts they hold.
+- [[tools/_MOC]] — mutation testing.
 - [[handoffs/_MOC]] — current ownership and exact next action.
 - [[CHANGELOG]] — behavior changes.
 

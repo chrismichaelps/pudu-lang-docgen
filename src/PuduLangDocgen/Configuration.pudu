@@ -1,0 +1,248 @@
+/** @Docgen.Configuration.Module — the typed project configuration of a documentation site */
+module PuduLangDocgen.Configuration
+
+import Std.Json as Json
+import PuduLangDocgen.Api.Catalog as Catalog
+import PuduLangDocgen.Api.Export as Export
+import PuduLangDocgen.Configuration.Fields as Fields
+import PuduLangDocgen.Configuration.Rules as Rules
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Site.Sitemap as Sitemap
+import PuduLangDocgen.Yaml as Yaml
+
+/** @Docgen.Configuration.Mapping — files matched by globs under a source folder, published under a destination */
+export type Mapping = { files: Array[Str], exclude: Array[Str], src: Str, dest: Str, meta: Array[(Str, Docgen.Meta)] }
+
+/** @Docgen.Configuration.ApiSource — Pudu sources documented as reference pages */
+export type ApiSource = { mappings: Array[Mapping], options: Catalog.Options, format: Str, filterFile: Str }
+
+/** @Docgen.Configuration.Contribution — the repository behind edit links */
+export type Contribution = { repo: Str, branch: Str, path: Str }
+
+/** @Docgen.Configuration.Diagrams — how PlantUML diagrams are drawn */
+export type Diagrams = { remote: Str, format: Str, local: Bool, jar: Str, java: Str }
+
+/** @Docgen.Configuration.Pdf — the command that turns printable documents into PDF files */
+export type Pdf = { renderer: Array[Str] }
+
+/** @Docgen.Configuration.Config — everything a build reads from the project configuration */
+export type Config = {
+  metadata: Array[ApiSource],
+  content: Array[Mapping],
+  resource: Array[Mapping],
+  overwrite: Array[Mapping],
+  output: Str,
+  globalMetadata: Array[(Str, Docgen.Meta)],
+  globalMetadataFiles: Array[Str],
+  fileMetadata: Array[Meta.Rule],
+  fileMetadataFiles: Array[Str],
+  templates: Array[Str],
+  xref: Array[Str],
+  xrefService: Array[Str],
+  sitemap: Option[Sitemap.Options],
+  gitFeatures: Bool,
+  contribution: Contribution,
+  warningsAsErrors: Bool,
+  rules: Array[(Str, Str)],
+  alerts: Array[(Str, Str)],
+  diagrams: Diagrams,
+  dryRun: Bool,
+  exportRawModel: Str,
+  exportViewModel: Str,
+  pdf: Option[Pdf]
+}
+
+/// Levels a rule may assign to a diagnostic code.
+export const LEVELS: Array[Str] = ["error", "warning", "info", "off"]
+
+/// Settings used when a configuration names nothing else.
+export fn defaults() -> Config {
+  Config {
+    metadata: [], content: [], resource: [], overwrite: [], output: "_site", globalMetadata: [], globalMetadataFiles: [],
+    fileMetadata: [], fileMetadataFiles: [], templates: ["default"], xref: [], xrefService: [], sitemap: None, gitFeatures: true,
+    contribution: Contribution{repo: "", branch: "main", path: ""}, warningsAsErrors: false, rules: [], alerts: [],
+    diagrams: Diagrams{remote: "https://www.plantuml.com/plantuml", format: "svg", local: false, jar: "plantuml.jar", java: "java"},
+    dryRun: false, exportRawModel: "", exportViewModel: "", pdf: None
+  }
+}
+
+/// A configuration read from JSON or YAML text; the file name decides the format and
+/// appears in every diagnostic.
+export fn parse(file: Str, text: Str) -> Result[Config, Array[Docgen.Diagnostic]] {
+  let value = if file.toLower().endsWith(".json") {
+    match Json.decode(text) {
+      case Ok(found) => Meta.fromJson(&found)
+      case Err(problem) => { return Err([Docgen.error(Codes.CONFIG_UNREADABLE, file, 1, "configuration is not valid JSON: " + Json.explain(&problem))]) }
+    }
+  } else {
+    match Yaml.decode(text) {
+      case Ok(found) => found
+      case Err(reason) => { return Err([Docgen.error(Codes.CONFIG_UNREADABLE, file, 1, "configuration is not valid YAML: " + reason)]) }
+    }
+  }
+  let fields = match value {
+    case Docgen.Fields(found) => found
+    case _ => { return Err([Docgen.error(Codes.CONFIG_INVALID, file, 1, "configuration must be an object")]) }
+  }
+  let config = match read(&Fields.Reader{file: file, at: "", fields: fields}) {
+    case Ok(found) => found
+    case Err(problem) => { return Err([problem]) }
+  }
+  let problems = Rules.check(file, &judged(&config))
+  if problems.isEmpty() { Ok(config) } else { Err(problems) }
+}
+
+/// The values the cross-field rules judge.
+fn judged(config: &Config) -> Rules.Settings {
+  let (mapped, base, priority, frequency) = match config.sitemap {
+    case Some(found) => (true, found.baseUrl, found.priority, found.changefreq)
+    case None => (false, "", "", "")
+  }
+  Rules.Settings {
+    output: config.output, sitemap: mapped, baseUrl: base, priority: priority, changefreq: frequency, xref: config.xref, services: config.xrefService,
+    destinations: config.metadata.map(|source: ApiSource| source.options.dest), repository: config.contribution.repo,
+    renderer: match config.pdf { case Some(found) => found.renderer case None => [] }
+  }
+}
+
+/// The whole configuration.
+fn read(top: &Fields.Reader) -> Result[Config, Docgen.Diagnostic] {
+  Fields.only(top, &["metadata", "build", "pdf"]) ?
+  var config = defaults()
+  var sources: Array[ApiSource] = []
+  for held in Fields.objects(top, "metadata") ? { sources = sources.push(apiSource(&held) ?) }
+  config = Config{..config, metadata: sources}
+  let build = Fields.nested(top, "build") ?
+  Fields.only(&build, &["content", "resource", "overwrite", "output", "dest", "globalMetadata", "globalMetadataFiles", "fileMetadata", "fileMetadataFiles", "template", "xref", "xrefService", "sitemap", "disableGitFeatures", "gitContribute", "warningsAsErrors", "rules", "markdownEngineProperties", "dryRun", "groups", "theme", "exportRawModel", "rawModelOutputFolder", "exportViewModel", "viewModelOutputFolder"]) ?
+  let global = Fields.nested(&build, "globalMetadata") ?
+  let files = Fields.nested(&build, "fileMetadata") ?
+  let rules = match Meta.rulesOf(&files.fields) {
+    case Ok(found) => found
+    case Err(reason) => { return Err(Fields.failure(&build, "fileMetadata", reason)) }
+  }
+  let output = Fields.directory(&build, "output", Fields.directory(&build, "dest", "_site") ?) ?
+  let chosen = Fields.texts(&build, "template") ?
+  let templates = (if chosen.isEmpty() { ["default"] } else { chosen }).concat(Fields.texts(&build, "theme") ?)
+  config = Config{..config,
+    content: mappings(&build, "content", false) ?, resource: mappings(&build, "resource", false) ?, overwrite: mappings(&build, "overwrite", false) ?,
+    output: output, globalMetadata: global.fields, globalMetadataFiles: Fields.texts(&build, "globalMetadataFiles") ?,
+    fileMetadata: rules, fileMetadataFiles: Fields.texts(&build, "fileMetadataFiles") ?,
+    templates: templates, xref: Fields.texts(&build, "xref") ?, xrefService: Fields.texts(&build, "xrefService") ?,
+    gitFeatures: !(Fields.flag(&build, "disableGitFeatures", false) ?), warningsAsErrors: Fields.flag(&build, "warningsAsErrors", false) ?,
+    dryRun: Fields.flag(&build, "dryRun", false) ?,
+    exportRawModel: if Fields.flag(&build, "exportRawModel", false) ? { Fields.directory(&build, "rawModelOutputFolder", output) ? } else { "" },
+    exportViewModel: if Fields.flag(&build, "exportViewModel", false) ? { Fields.directory(&build, "viewModelOutputFolder", output) ? } else { "" } }
+  let contribute = Fields.nested(&build, "gitContribute") ?
+  Fields.only(&contribute, &["repo", "branch", "path"]) ?
+  config = Config{..config, contribution: Contribution{repo: Fields.text(&contribute, "repo", "") ?, branch: Fields.text(&contribute, "branch", "main") ?, path: Fields.directory(&contribute, "path", "") ?}}
+  let ruleReader = Fields.nested(&build, "rules") ?
+  var levels: Array[(Str, Str)] = []
+  for (code, _level) in ruleReader.fields {
+    let level = Fields.text(&ruleReader, code, "") ?
+    if !LEVELS.contains(level) { return Err(Fields.failure(&ruleReader, code, "must be one of " + LEVELS.join(", "))) }
+    levels = levels.push((code, level))
+  }
+  let engine = Fields.nested(&build, "markdownEngineProperties") ?
+  Fields.only(&engine, &["alerts", "plantUml"]) ?
+  let alerts = Fields.nested(&engine, "alerts") ?
+  var kinds: Array[(Str, Str)] = []
+  for (kind, _style) in alerts.fields { kinds = kinds.push((kind.toUpper(), Fields.text(&alerts, kind, "") ?)) }
+  let plant = Fields.nested(&engine, "plantUml") ?
+  Fields.only(&plant, &["remoteUrl", "outputFormat", "renderingMode", "localPlantUmlPath", "javaPath"]) ?
+  let format = Fields.text(&plant, "outputFormat", "svg") ?
+  if !["svg", "png", "txt"].contains(format) { return Err(Fields.failure(&plant, "outputFormat", "must be svg, png, or txt")) }
+  let mode = Fields.text(&plant, "renderingMode", "remote") ?
+  if mode != "remote" && mode != "local" { return Err(Fields.failure(&plant, "renderingMode", "must be remote or local")) }
+  let remote = Fields.text(&plant, "remoteUrl", config.diagrams.remote) ?
+  let diagrams = Diagrams{remote: if remote.endsWith("/") { remote.take(remote.length() - 1) } else { remote }, format: format, local: mode == "local", jar: Fields.text(&plant, "localPlantUmlPath", config.diagrams.jar) ?, java: Fields.text(&plant, "javaPath", config.diagrams.java) ?}
+  config = Config{..config, rules: levels, alerts: kinds, diagrams: diagrams}
+  let map = Fields.nested(&build, "sitemap") ?
+  if !map.fields.isEmpty() { config = Config{..config, sitemap: Some(sitemap(&map) ?)} }
+  let pdf = Fields.nested(top, "pdf") ?
+  if !pdf.fields.isEmpty() {
+    Fields.only(&pdf, &["renderer"]) ?
+    config = Config{..config, pdf: Some(Pdf{renderer: Fields.texts(&pdf, "renderer") ?})}
+  }
+  Ok(config)
+}
+
+/// File mappings under a key; plain text or a list of globs counts as one mapping. Only API
+/// sources, marked by `above`, may name a source folder above the project.
+fn mappings(reader: &Fields.Reader, key: Str, above: Bool) -> Result[Array[Mapping], Docgen.Diagnostic] {
+  match Meta.get(&reader.fields, key) {
+    case Some(Docgen.Text(_found)) => { return Ok([Mapping{files: Fields.texts(reader, key) ?, exclude: [], src: "", dest: "", meta: []}]) }
+    case Some(Docgen.Items(listed)) => {
+      let plain = listed.filter(|held: Docgen.Meta| match held { case Docgen.Text(_found) => true case _ => false })
+      if plain.length() == listed.length() && !listed.isEmpty() { return Ok([Mapping{files: Fields.texts(reader, key) ?, exclude: [], src: "", dest: "", meta: []}]) }
+    }
+    case _ => {}
+  }
+  var result: Array[Mapping] = []
+  for held in Fields.objects(reader, key) ? {
+    Fields.only(&held, &["files", "exclude", "src", "dest", "group"]) ?
+    let files = Fields.texts(&held, "files") ?
+    if files.isEmpty() { return Err(Fields.failure(&held, "files", "must name at least one glob")) }
+    var dest = Fields.directory(&held, "dest", "") ?
+    var meta: Array[(Str, Docgen.Meta)] = []
+    let group = Fields.text(&held, "group", "") ?
+    if !group.isEmpty() {
+      let groups = Fields.nested(reader, "groups") ?
+      let settings = Fields.nested(&groups, group) ?
+      if settings.fields.isEmpty() { return Err(Fields.failure(&held, "group", "names no entry of build.groups: " + group)) }
+      let folder = Fields.directory(&settings, "dest", "") ?
+      dest = if folder.isEmpty() { dest } else if dest.isEmpty() { folder } else { folder + "/" + dest }
+      for (name, held) in settings.fields {
+        if name != "dest" { meta = meta.push((name, held)) }
+      }
+    }
+    result = result.push(Mapping{files: files, exclude: Fields.texts(&held, "exclude") ?, src: if above { Fields.sourceFolder(&held, "src", "") ? } else { Fields.directory(&held, "src", "") ? }, dest: dest, meta: meta})
+  }
+  Ok(result)
+}
+
+/// One API metadata source.
+fn apiSource(reader: &Fields.Reader) -> Result[ApiSource, Docgen.Diagnostic] {
+  Fields.only(reader, &["src", "dest", "includePrivateMembers", "filter", "sourceUrl", "sourceLinkExclude", "outputFormat", "namespaceLayout", "memberLayout", "categoryLayout", "enumSortOrder", "shouldSkipMarkup"]) ?
+  let sources = mappings(reader, "src", true) ?
+  if sources.isEmpty() { return Err(Fields.failure(reader, "src", "must name the Pudu sources to document")) }
+  let filterFile = match Meta.get(&reader.fields, "filter") {
+    case Some(Docgen.Text(path)) => path
+    case _ => ""
+  }
+  let filter = if filterFile.isEmpty() { Fields.nested(reader, "filter") ? } else { Fields.Reader{file: reader.file, at: reader.at + ".filter", fields: []} }
+  Fields.only(&filter, &["include", "exclude"]) ?
+  let format = Fields.text(reader, "outputFormat", "json") ?
+  if !Export.FORMATS.contains(format) { return Err(Fields.failure(reader, "outputFormat", "must be one of " + Export.FORMATS.join(", "))) }
+  let namespaces = choice(reader, "namespaceLayout", "flattened", &["flattened", "nested"]) ?
+  let members = choice(reader, "memberLayout", "samePage", &["samePage", "separatePages"]) ?
+  let categories = choice(reader, "categoryLayout", "flattened", &["flattened", "nested", "none"]) ?
+  let order = choice(reader, "enumSortOrder", "declaringOrder", &["alphabetic", "declaringOrder"]) ?
+  let options = Catalog.Options{..Catalog.defaults(),
+    dest: Fields.directory(reader, "dest", "api") ?, includePrivate: Fields.flag(reader, "includePrivateMembers", false) ?,
+    include: Fields.texts(&filter, "include") ?, exclude: Fields.texts(&filter, "exclude") ?, sourceUrl: Fields.text(reader, "sourceUrl", "") ?,
+    sourceExclude: Fields.texts(reader, "sourceLinkExclude") ?, nested: namespaces == "nested", separate: members == "separatePages",
+    skipMarkup: Fields.flag(reader, "shouldSkipMarkup", false) ?, alphabetic: order == "alphabetic", categories: categories }
+  Ok(ApiSource{mappings: sources, options: options, format: format, filterFile: filterFile})
+}
+
+/// Text under a key that must be one of the allowed values.
+fn choice(reader: &Fields.Reader, key: Str, fallback: Str, allowed: &Array[Str]) -> Result[Str, Docgen.Diagnostic] {
+  let written = Fields.text(reader, key, fallback) ?
+  if !allowed.contains(written) { return Err(Fields.failure(reader, key, "must be one of " + allowed.join(", "))) }
+  Ok(written)
+}
+
+/// Sitemap settings with per-glob file options.
+fn sitemap(reader: &Fields.Reader) -> Result[Sitemap.Options, Docgen.Diagnostic] {
+  Fields.only(reader, &["baseUrl", "priority", "changefreq", "fileOptions"]) ?
+  let options = Fields.nested(reader, "fileOptions") ?
+  var files: Array[(Str, Array[(Str, Docgen.Meta)])] = []
+  for (pattern, _settings) in options.fields {
+    let settings = Fields.nested(&options, pattern) ?
+    Fields.only(&settings, &["baseUrl", "priority", "changefreq"]) ?
+    files = files.push((pattern, settings.fields))
+  }
+  Ok(Sitemap.Options{baseUrl: Fields.text(reader, "baseUrl", "") ?, priority: Fields.text(reader, "priority", "0.5") ?, changefreq: Fields.text(reader, "changefreq", "daily") ?, files: files})
+}

@@ -1,0 +1,107 @@
+/** @Docgen.Navigation.Tests — tables of contents parse, nest, and bind to pages */
+module PuduLangDocgen.NavigationTest
+
+import Std.Io as Io
+import Std.Test as Test
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Navigation as Navigation
+import PuduLangDocgen.Navigation.Resolve as Resolve
+
+/// An item with a title, destination, and children.
+fn item(title: Str, href: Str, children: Array[Docgen.TocItem]) -> Docgen.TocItem {
+  Docgen.TocItem{title: title, href: href, uid: "", expanded: false, children: children}
+}
+
+/// Parsed items, or none when parsing fails.
+fn parsed(path: Str, text: Str) -> Array[Docgen.TocItem] {
+  match Navigation.parse(path, text) {
+    case Ok(found) => found.items
+    case Err(_) => []
+  }
+}
+
+/// Table-level metadata of a parsed table of contents.
+fn meta(path: Str, text: Str) -> Array[(Str, Docgen.Meta)] {
+  match Navigation.parse(path, text) {
+    case Ok(found) => found.meta
+    case Err(_) => []
+  }
+}
+
+/// The first diagnostic code of a failed parse.
+fn refused(path: Str, text: Str) -> Str {
+  match Navigation.parse(path, text) {
+    case Ok(_) => "accepted"
+    case Err(found) => found[0].code
+  }
+}
+
+/// A docset of two folders with nested tables of contents.
+fn links() -> Resolve.Links {
+  let tocs = mapOf([
+      ("docs/toc.yml", parsed("docs/toc.yml", "- name: Home\n  href: index.md\n- name: Guide\n  href: guide/\n- name: API\n  uid: Api.Root\n- name: Site\n  href: https://example.org\n- name: Missing\n  href: gone.md")),
+      ("docs/guide/toc.yml", parsed("docs/guide/toc.yml", "- href: start.md\n- name: Deep\n  items:\n  - name: Advanced\n    href: advanced.md#tuning")),
+      ("docs/loop/toc.yml", parsed("docs/loop/toc.yml", "- name: Back\n  href: ../loop/toc.yml"))
+    ])
+  let outputs = mapOf([("docs/index.md", "index.html"), ("docs/guide/start.md", "guide/start.html"), ("docs/guide/advanced.md", "guide/advanced.html")])
+  let references = mapOf([("Api.Root", Docgen.Reference{uid: "Api.Root", name: "Root", fullName: "Api.Root", href: "api/Api.Root.html", kind: "module"})])
+  Resolve.Links{tocs: tocs, outputs: outputs, references: references, titles: mapOf([("guide/start.html", "Start")])}
+}
+
+/// A table of a section label and a page, resolved.
+fn labels() -> Array[Docgen.TocItem] {
+  let (items, _problems) = Resolve.resolve("docs/labels.yml", &Resolve.Links{..links(), tocs: mapOf([("docs/labels.yml", parsed("docs/labels.yml", "- name: Section\n- name: Home\n  href: index.md"))])})
+  items
+}
+
+/// Runs every parsing, resolution, governing, trail, and ordering contract.
+fn main() -> Int {
+  let (root, problems) = Resolve.resolve("docs/toc.yml", &links())
+  let (_loop, loopProblems) = Resolve.resolve("docs/loop/toc.yml", &links())
+  let candidates = [Resolve.Candidate{output: "toc.json", order: 0, pages: []}, Resolve.Candidate{output: "guide/toc.json", order: 0, pages: []}]
+  let checks = Test.suite("Navigation", &[
+      Test.equals("yaml items", &parsed("toc.yml", "- name: A\n  href: a.md\n  items:\n  - name: B\n    href: b.md"), &[item("A", "a.md", [item("B", "b.md", [])])]),
+      Test.equals("compact nested sequence", &parsed("toc.yml", "- name: A\n  items:\n  - name: B\n    href: b.md"), &[item("A", "", [item("B", "b.md", [])])]),
+      Test.equals("items object", &parsed("toc.yml", "items:\n- name: A\n  href: a.md"), &[item("A", "a.md", [])]),
+      Test.equals("json items", &parsed("toc.json", "[\{\"name\": \"A\", \"href\": \"a.md\"\}]"), &[item("A", "a.md", [])]),
+      Test.equals("markdown items nest", &parsed("toc.md", "# [A](a.md)\n## [B](b.md)\n# Group\n## [C](c.md)"), &[item("A", "a.md", [item("B", "b.md", [])]), item("Group", "", [item("C", "c.md", [])])]),
+      Test.equals("display name wins", &parsed("toc.yml", "- name: a\n  displayName: Shown\n  href: a.md")[0].title, &"Shown"),
+      Test.equals("expanded flag", &parsed("toc.yml", "- name: a\n  href: a.md\n  expanded: true")[0].expanded, &true),
+      Test.equals("empty file", &parsed("toc.yml", ""), &[]),
+      Test.equals("invalid yaml", &refused("toc.yml", "- name: a\n\thref: b"), &Codes.TOC_SYNTAX),
+      Test.equals("invalid json", &refused("toc.json", "[\{"), &Codes.TOC_SYNTAX),
+      Test.equals("not a list", &refused("toc.yml", "name: a"), &Codes.TOC_SHAPE),
+      Test.equals("unknown field", &refused("toc.yml", "- name: a\n  colour: red"), &Codes.TOC_UNKNOWN_FIELD),
+      Test.equals("nameless item", &refused("toc.yml", "- expanded: true"), &Codes.TOC_NAMELESS),
+      Test.equals("table metadata", &meta("toc.yml", "order: 200\npdf: true\nitems:\n- name: A\n  href: a.md"), &[("order", Docgen.Whole(200)), ("pdf", Docgen.Flag(true))]),
+      Test.equals("titles taken from pages", &root[1].children[0].title, &"Start"),
+      Test.equals("unsafe href", &refused("toc.yml", "- name: a\n  href: javascript:x"), &Codes.TOC_UNSAFE),
+      Test.equals("unsafe markdown href", &refused("toc.md", "# [a](javascript:x)"), &Codes.TOC_UNSAFE),
+      Test.equals("recognized names", &["toc.yml", "a/TOC.md", "b/toc.json", "toc.txt"].map(|path: Str| Navigation.isToc(path)), &[true, true, true, false]),
+      Test.equals("resolved titles", &root.map(|found: Docgen.TocItem| found.title), &["Home", "Guide", "API", "Site"]),
+      Test.equals("local href mapped", &root[0].href, &"index.html"),
+      Test.equals("folder brings nested items", &root[1].children.map(|found: Docgen.TocItem| found.title), &["Start", "Deep"]),
+      Test.equals("folder links its first page", &root[1].href, &"guide/start.html"),
+      Test.equals("fragment kept", &root[1].children[1].children[0].href, &"guide/advanced.html#tuning"),
+      Test.equals("uid resolves", &root[2].href, &"api/Api.Root.html"),
+      Test.equals("remote kept", &root[3].href, &"https://example.org"),
+      Test.equals("missing target warns", &problems.map(|found: Docgen.Diagnostic| found.code), &[Codes.TOC_TARGET_MISSING]),
+      Test.equals("cycles refused", &loopProblems.map(|found: Docgen.Diagnostic| found.code), &[Codes.TOC_CYCLE]),
+      Test.equals("governing by folder", &[Resolve.governing("guide/start.html", &candidates), Resolve.governing("index.html", &candidates), Resolve.governing("guides/x.html", &[candidates[1]])], &["guide/toc.json", "toc.json", ""]),
+      Test.equals("linking tables win", &Resolve.governing("guide/start.html", &[candidates[0], candidates[1], Resolve.Candidate{output: "other/toc.json", order: 0, pages: ["guide/start.html"]}]), &"other/toc.json"),
+      Test.equals("lower order wins", &Resolve.governing("a/b.html", &[Resolve.Candidate{output: "a/toc.json", order: 100, pages: ["a/b.html"]}, Resolve.Candidate{output: "toc.json", order: 0, pages: ["a/b.html"]}]), &"toc.json"),
+      Test.equals("pages of a tree", &Resolve.pagesOf(&root), &["index.html", "guide/start.html", "guide/advanced.html", "api/Api.Root.html"]),
+      Test.equals("output of toc", &[Resolve.outputOf("docs/toc.yml"), Resolve.outputOf("toc.md")], &["docs/toc.json", "toc.json"]),
+      Test.equals("trail", &Resolve.trail(&root, "guide/advanced.html").map(|found: Docgen.TocItem| found.title), &["Guide", "Deep", "Advanced"]),
+      Test.equals("deepest item wins the trail", &Resolve.trail(&root, "guide/start.html").map(|found: Docgen.TocItem| found.title), &["Guide", "Start"]),
+      Test.equals("name-only items become labels", &labels().map(|found: Docgen.TocItem| (found.title, found.href)), &[("Section", ""), ("Home", "index.html")]),
+      Test.equals("reading order", &Resolve.readingOrder(&root).map(|found: Docgen.TocItem| found.href), &["index.html", "guide/start.html", "guide/advanced.html#tuning", "api/Api.Root.html"]),
+      Test.equals("neighbors", &Resolve.neighbors(&root, "guide/start.html"), &(Some(root[0]), Some(root[1].children[1].children[0]))),
+      Test.equals("unlisted page has no neighbors", &Resolve.neighbors(&root, "other.html"), &(None, None)),
+      Test.equals("pages fallback", &Navigation.forPages(&[Docgen.Page{path: "b.html", source: "b.md", kind: "article", title: "B", uid: "", summary: "", body: "", headings: [], links: [], meta: []}]), &[item("B", "b.html", [])])
+    ])
+  let ran = Test.run(&checks)
+  for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
+  Test.report(&ran)
+}

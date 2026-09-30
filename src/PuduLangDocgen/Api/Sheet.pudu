@@ -1,0 +1,161 @@
+/** @Docgen.Api.Sheet — structured API pages written by any language's converter */
+module PuduLangDocgen.Api.Sheet
+
+import Std.Option as Option
+import PuduLangDocgen.Constants.Codes as Codes
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown.Highlight as Highlight
+import PuduLangDocgen.Markdown as Markdown
+import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Paths as Paths
+
+/** @Docgen.Api.SheetPage — the rendered title, body, outline, and findings of a page */
+export type Rendered = { title: Str, body: Str, headings: Array[Docgen.Heading], links: Array[Docgen.Link], diagnostics: Array[Docgen.Diagnostic] }
+
+/// Heading block keys and their levels.
+const HEADINGS: Array[(Str, Int)] = [("h1", 1), ("h2", 2), ("h3", 3), ("h4", 4), ("h5", 5), ("h6", 6)]
+
+/// API heading block keys and the heading levels they render as.
+const APIS: Array[(Str, Int)] = [("api1", 1), ("api2", 2), ("api3", 3), ("api4", 4)]
+
+/// A page from an API page document: `title`, optional `languageId`, and a `body` of blocks
+/// named `h1`–`h6`, `api1`–`api4`, `markdown`, `code`, `facts`, `parameters`, `list`, and
+/// `inheritance`. Unknown blocks are reported and skipped.
+export fn render(value: &Docgen.Meta, context: &Phrase.Scope) -> Result[Rendered, Str] {
+  let fields = match value {
+    case Docgen.Fields(found) => found
+    case _ => { return Err("API page must be an object") }
+  }
+  let title = Meta.textOr(&fields, "title", "")
+  if title.isEmpty() { return Err("API page needs a title") }
+  let language = Meta.textOr(&fields, "languageId", "")
+  let blocks = match Meta.get(&fields, "body") {
+    case Some(Docgen.Items(found)) => found
+    case _ => { return Err("API page needs a body list") }
+  }
+  var result = Rendered{title: title, body: "", headings: [], links: [], diagnostics: []}
+  var pieces: Array[Str] = []
+  for block in blocks {
+    let entry = match block {
+      case Docgen.Fields(found) => found
+      case _ => { return Err("each API page block must be an object") }
+    }
+    let (html, next) = piece(&entry, language, context, result)
+    pieces = pieces.push(html)
+    result = next
+  }
+  Ok(Rendered{..result, body: pieces.join("")})
+}
+
+/// One block as HTML with the page facts it adds.
+fn piece(entry: &Array[(Str, Docgen.Meta)], language: Str, context: &Phrase.Scope, result: Rendered) -> (Str, Rendered) {
+  for (key, level) in HEADINGS {
+    match Meta.text(entry, key) {
+      case Some(text) => { return heading(level, text, Meta.textOr(entry, "id", Paths.slug(text)), "", result) }
+      case None => {}
+    }
+  }
+  for (key, level) in APIS {
+    match Meta.text(entry, key) {
+      case Some(text) => {
+        var badges: Array[Str] = []
+        for (flag, label) in [("deprecated", "Deprecated"), ("preview", "Preview")] {
+          match Meta.get(entry, flag) {
+            case Some(Docgen.Flag(true)) => { badges = badges.push("<span class=\"badge " + flag + "\">" + label + "</span>") }
+            case Some(Docgen.Text(reason)) => { badges = badges.push("<span class=\"badge " + flag + "\" title=\"" + Paths.escape(reason) + "\">" + label + "</span>") }
+            case _ => {}
+          }
+        }
+        let src = Meta.textOr(entry, "src", "")
+        let source = if src.isEmpty() || !Paths.href(src) { "" } else { "<a class=\"api-source-link external\" href=\"" + Paths.escape(src) + "\">View source</a>" }
+        return heading(level, text, Meta.textOr(entry, "id", Paths.slug(text)), badges.join("") + source, result)
+      }
+      case None => {}
+    }
+  }
+  match Meta.text(entry, "markdown") {
+    case Some(text) => {
+      let rendered = Markdown.fragment(text, context, 0)
+      return (rendered.html, Rendered{..result, links: result.links.concat(rendered.links), diagnostics: result.diagnostics.concat(rendered.diagnostics)})
+    }
+    case None => {}
+  }
+  match Meta.text(entry, "code") {
+    case Some(text) => {
+      let chosen = Meta.textOr(entry, "languageId", language)
+      return ("<div class=\"api-signature\"><pre><code class=\"lang-" + Paths.escape(chosen) + "\">" + Highlight.lines(chosen, text).join("\n") + "</code></pre></div>\n", result)
+    }
+    case None => {}
+  }
+  match Meta.get(entry, "facts") {
+    case Some(Docgen.Items(facts)) => {
+      var rows: Array[Str] = []
+      for fact in facts {
+        let held = match fact { case Docgen.Fields(found) => found case _ => [] }
+        rows = rows.push("<div class=\"fact\"><dt>" + Paths.escape(Meta.textOr(&held, "name", "")) + "</dt><dd>" + inline(&Option.unwrapOr(Meta.get(&held, "value"), Docgen.Nothing), context) + "</dd></div>")
+      }
+      return ("<dl class=\"api-facts\">" + rows.join("") + "</dl>\n", result)
+    }
+    case _ => {}
+  }
+  match Meta.get(entry, "parameters") {
+    case Some(Docgen.Items(parameters)) => { return parameterList(&parameters, context, result) }
+    case _ => {}
+  }
+  for (key, joiner) in [("list", ", "), ("inheritance", " → ")] {
+    match Meta.get(entry, key) {
+      case Some(Docgen.Items(items)) => { return ("<p class=\"api-" + key + "\">" + items.map(|item: Docgen.Meta| inline(&item, context)).join(joiner) + "</p>\n", result) }
+      case _ => {}
+    }
+  }
+  let keys = entry.map(fn(pair: (Str, Docgen.Meta)) -> Str {
+      let (name, _held) = pair
+      name
+    })
+  ("", Rendered{..result, diagnostics: result.diagnostics.push(Docgen.warning(Codes.CONTENT_UNSUPPORTED, context.source, 1, "unknown API page block: " + keys.join(", ")))})
+}
+
+/// A heading with an anchor and optional trailing markup, recorded in the page outline.
+fn heading(level: Int, text: Str, id: Str, trailing: Str, result: Rendered) -> (Str, Rendered) {
+  let tag = "h" + show(level)
+  let html = "<" + tag + " id=\"" + Paths.escape(id) + "\">" + Paths.escape(text) + trailing + "</" + tag + ">\n"
+  (html, Rendered{..result, headings: result.headings.push(Docgen.Heading{id: id, title: text, level: level})})
+}
+
+/// A parameter list with types, defaults, flags, and Markdown descriptions.
+fn parameterList(parameters: &Array[Docgen.Meta], context: &Phrase.Scope, result: Rendered) -> (Str, Rendered) {
+  var held = result
+  var rows: Array[Str] = []
+  for parameter in *parameters {
+    let fields = match parameter { case Docgen.Fields(found) => found case _ => [] }
+    let kind = match Meta.get(&fields, "type") {
+      case Some(value) => " <span class=\"parameter-type\">" + inline(&value, context) + "</span>"
+      case None => ""
+    }
+    let defaultValue = Meta.textOr(&fields, "default", "")
+    let fallback = if defaultValue.isEmpty() { "" } else { " = <code>" + Paths.escape(defaultValue) + "</code>" }
+    let flags = (if Option.isSome(&Meta.get(&fields, "deprecated")) { " <span class=\"badge deprecated\">Deprecated</span>" } else { "" }) + (if Option.isSome(&Meta.get(&fields, "preview")) { " <span class=\"badge preview\">Preview</span>" } else { "" })
+    let description = Markdown.fragment(Meta.textOr(&fields, "description", ""), context, 0)
+    held = Rendered{..held, links: held.links.concat(description.links), diagnostics: held.diagnostics.concat(description.diagnostics)}
+    rows = rows.push("<dt><code>" + Paths.escape(Meta.textOr(&fields, "name", "")) + "</code>" + kind + fallback + flags + "</dt><dd>" + description.html + "</dd>")
+  }
+  ("<dl class=\"api-parameters\">" + rows.join("") + "</dl>\n", held)
+}
+
+/// An inline value: text, a `{text, url}` link, or a list of both.
+fn inline(value: &Docgen.Meta, context: &Phrase.Scope) -> Str {
+  match value {
+    case Docgen.Text(written) => Paths.escape(written)
+    case Docgen.Items(spans) => spans.map(|span: Docgen.Meta| inline(&span, context)).join("")
+    case Docgen.Fields(fields) => {
+      let text = Paths.escape(Meta.textOr(&fields, "text", ""))
+      let url = Meta.textOr(&fields, "url", "")
+      if url.isEmpty() || !Paths.href(url) { text } else {
+        let href = if Paths.remote(url) || url.startsWith("#") { url } else { Paths.between(context.page, url) }
+        "<a href=\"" + Paths.escape(href) + "\">" + text + "</a>"
+      }
+    }
+    case _ => ""
+  }
+}

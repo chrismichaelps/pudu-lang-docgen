@@ -1,0 +1,10 @@
+- name: Home
+  href: index.yml
+- name: Docs
+  href: guides/
+- name: API
+  href: api/
+- name: Extensions
+  href: extensions/
+- name: GitHub
+  href: https://github.com/chrismichaelps/pudu-lang-docgen

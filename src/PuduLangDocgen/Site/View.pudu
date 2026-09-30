@@ -1,0 +1,210 @@
+/** @Docgen.Site.View — everything a layout shows for one page, as template metadata */
+module PuduLangDocgen.Site.View
+
+import Std.Json as Json
+import Std.Option as Option
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Markdown.Sanitize as Sanitize
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.Site.Strings as Strings
+
+/** @Docgen.Site.Frame — navigation and history around a page */
+export type Frame = {
+  navbar: Array[Docgen.TocItem],
+  toc: Array[Docgen.TocItem],
+  trail: Array[Docgen.TocItem],
+  previous: Option[Docgen.TocItem],
+  next: Option[Docgen.TocItem],
+  editUrl: Str,
+  updated: Str,
+  features: Array[Str],
+  root: Str,
+  pdf: Str,
+  year: Str,
+  tocPath: Str,
+  navPath: Str
+}
+
+/// Script loaded on pages with diagrams unless `_mermaidScript` names another.
+const MERMAID: Str = "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"
+
+/// Script loaded on pages with math unless `_mathScript` names another.
+const MATHJAX: Str = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"
+
+/// The view of a page: site identity, navigation, content, and interface text.
+/// Page metadata switches parts off with `_disableToc`, `_disableAffix`, `_disableBreadcrumb`,
+/// `_disableNavbar`, `_disableFooter`, `_disableContribution`, `_disableNextArticle`, and
+/// `_enableSearch: false`. The footer shows `_appFooter` markup, or else the `_footerLinks`
+/// list and a `_copyright` line dated with the build year. Plain layouts show no page actions.
+export fn view(page: &Docgen.Page, frame: &Frame) -> Docgen.Meta {
+  let meta = page.meta
+  let root = if frame.root.isEmpty() { Paths.rootOf(page.path) } else { frame.root }
+  let local = |href: Str| if href.isEmpty() || Paths.remote(href) { href } else { root + href }
+  let siteName = Meta.textOr(&meta, "_appName", Meta.textOr(&meta, "_appTitle", "Documentation"))
+  let lang = Meta.textOr(&meta, "_lang", "")
+  let layout = Meta.textOr(&meta, "_layout", "default")
+  let plain = layout == "landing" || layout == "chromeless"
+  let showToc = !plain && !Meta.flag(&meta, "_disableToc") && !frame.toc.isEmpty()
+  let showAffix = !plain && !Meta.flag(&meta, "_disableAffix") && page.headings.filter(|found: Docgen.Heading| found.level == 2 || found.level == 3).length() > 1
+  let showNavbar = !Meta.flag(&meta, "_disableNavbar") && !frame.navbar.isEmpty()
+  let editUrl = if Meta.flag(&meta, "_disableContribution") { "" } else { frame.editUrl }
+  let hidePager = plain || Meta.flag(&meta, "_disableNextArticle")
+  let previous = if hidePager { None } else { frame.previous }
+  let next = if hidePager { None } else { frame.next }
+  let baseUrl = Meta.textOr(&meta, "_baseUrl", "")
+  let canonical = if baseUrl.isEmpty() { "" } else { (if baseUrl.endsWith("/") { baseUrl } else { baseUrl + "/" }) + page.path }
+  let footer = Meta.textOr(&meta, "_appFooter", "")
+  let footerLinks = links(&meta, "_footerLinks", root)
+  let holder = Meta.textOr(&meta, "_copyright", "")
+  let copyright = if holder.isEmpty() { "" } else { "© " + (if frame.year.isEmpty() { "" } else { frame.year + " " }) + holder }
+  let pdfUrl = if frame.pdf.isEmpty() { "" } else { Paths.between(page.path, frame.pdf) }
+  let fields: Array[(Str, Docgen.Meta)] = [
+    ("lang", Docgen.Text(lang)), ("root", Docgen.Text(root)), ("kind", Docgen.Text(page.kind)),
+    ("title", Docgen.Text(page.title)), ("siteTitle", Docgen.Text(Meta.textOr(&meta, "_appTitle", ""))),
+    ("siteName", Docgen.Text(siteName)), ("description", Docgen.Text(Meta.textOr(&meta, "description", page.summary))),
+    ("noindex", Docgen.Flag(Meta.flag(&meta, "_noindex"))), ("canonical", Docgen.Text(canonical)),
+    ("favicon", Docgen.Text(local(Meta.textOr(&meta, "_appFaviconPath", "")))), ("logo", Docgen.Text(local(Meta.textOr(&meta, "_appLogoPath", "")))),
+    ("customStyle", Docgen.Text(local(Meta.textOr(&meta, "_appStyle", "")))), ("customScript", Docgen.Text(local(Meta.textOr(&meta, "_appScript", "")))),
+    ("searchEnabled", Docgen.Flag(Meta.textOr(&meta, "_enableSearch", "true") != "false")),
+    ("showToc", Docgen.Flag(showToc)), ("showAffix", Docgen.Flag(showAffix)), ("showNavbar", Docgen.Flag(showNavbar)),
+    ("showBreadcrumb", Docgen.Flag(!plain && !Meta.flag(&meta, "_disableBreadcrumb"))), ("showTocFilter", Docgen.Flag(!Meta.flag(&meta, "_disableTocFilter"))),
+    ("layout", Docgen.Text(layout)), ("chromeless", Docgen.Flag(layout == "chromeless")),
+    ("showFooter", Docgen.Flag(layout != "chromeless" && !Meta.flag(&meta, "_disableFooter"))),
+    ("logoUrl", Docgen.Text(Meta.textOr(&meta, "_appLogoUrl", root + "index.html"))),
+    ("keywords", Docgen.Text(listed(&meta, "keywords"))), ("author", Docgen.Text(Meta.textOr(&meta, "author", ""))),
+    ("ogType", Docgen.Text(if layout == "landing" || page.path == "index.html" { "website" } else { "article" })),
+    ("image", Docgen.Text(absolute(Meta.textOr(&meta, "image", Meta.textOr(&meta, "_appOgImagePath", "")), baseUrl, root))),
+    ("twitter", Docgen.Text(Meta.textOr(&meta, "_twitterSite", ""))), ("themeColor", Docgen.Text(Meta.textOr(&meta, "_themeColor", ""))),
+    ("touchIcon", Docgen.Text(local(Meta.textOr(&meta, "_appTouchIconPath", "")))),
+    ("extraMeta", Docgen.Items(Meta.fieldsOf(&meta, "_meta").map(fn(entry: (Str, Docgen.Meta)) -> Docgen.Meta {
+            let (name, content) = entry
+            Docgen.Fields([("name", Docgen.Text(name)), ("content", content)])
+          }))),
+    ("structuredData", Docgen.Text(structured(page, frame, siteName, baseUrl))), ("analytics", Docgen.Text(Meta.textOr(&meta, "_googleAnalyticsTagId", ""))),
+    ("pdfUrl", Docgen.Text(pdfUrl)),
+    ("_rel", Docgen.Text(root)), ("_path", Docgen.Text(page.path)), ("_tocPath", Docgen.Text(frame.tocPath)),
+    ("_tocRel", Docgen.Text(if frame.tocPath.isEmpty() { "" } else { Paths.rootOf(page.path) + Paths.directoryOf(frame.tocPath) })),
+    ("_navPath", Docgen.Text(frame.navPath)), ("_navRel", Docgen.Text(if frame.navPath.isEmpty() { "" } else { Paths.between(page.path, frame.navPath) })),
+    ("navbar", Docgen.Items(navbar(page, frame))), ("toc", Docgen.Text(if showToc { tocHtml(&frame.toc, page.path, &frame.trail) } else { "" })),
+    ("breadcrumb", Docgen.Items(breadcrumb(page, frame, siteName))),
+    ("hasActions", Docgen.Flag(!plain && (!editUrl.isEmpty() || !frame.updated.isEmpty() || !pdfUrl.isEmpty()))), ("editUrl", Docgen.Text(editUrl)), ("lastModified", Docgen.Text(frame.updated)),
+    ("hasPager", Docgen.Flag(Option.isSome(&previous) || Option.isSome(&next))), ("previous", neighbor(&previous, page.path)), ("next", neighbor(&next, page.path)),
+    ("headings", Docgen.Items(page.headings.filter(|found: Docgen.Heading| found.level == 2 || found.level == 3).map(|found: Docgen.Heading| Docgen.Fields([("id", Docgen.Text(found.id)), ("title", Docgen.Text(found.title)), ("level", Docgen.Whole(found.level))])))),
+    ("body", Docgen.Text(page.body)), ("footer", Docgen.Text(Sanitize.clean(footer))),
+    ("hasFooterLinks", Docgen.Flag(!footerLinks.isEmpty())), ("footerLinks", Docgen.Items(footerLinks)), ("copyright", Docgen.Text(copyright)),
+    ("math", Docgen.Flag(frame.features.contains("math"))), ("mathScript", Docgen.Text(Meta.textOr(&meta, "_mathScript", MATHJAX))),
+    ("mermaid", Docgen.Flag(frame.features.contains("mermaid"))), ("mermaidScript", Docgen.Text(Meta.textOr(&meta, "_mermaidScript", MERMAID))),
+    ("text", Strings.forLanguage(lang, &Meta.fieldsOf(&meta, "_text")))
+  ]
+  Docgen.Fields(fields)
+}
+
+/// Links listed under a key as objects with `name` and `href`; unsafe or incomplete entries are
+/// left out and local destinations are made relative to the page.
+fn links(meta: &Array[(Str, Docgen.Meta)], key: Str, root: Str) -> Array[Docgen.Meta] {
+  var result: Array[Docgen.Meta] = []
+  match Meta.get(meta, key) {
+    case Some(Docgen.Items(entries)) => {
+      for entry in entries {
+        match entry {
+          case Docgen.Fields(fields) => {
+            let name = Meta.textOr(&fields, "name", "")
+            let href = Meta.textOr(&fields, "href", "")
+            if !name.isEmpty() && !href.isEmpty() && Paths.href(href) {
+              result = result.push(Docgen.Fields([("name", Docgen.Text(name)), ("href", Docgen.Text(if Paths.remote(href) { href } else { root + href }))]))
+            }
+          }
+          case _ => {}
+        }
+      }
+    }
+    case _ => {}
+  }
+  result
+}
+
+/// A list of keywords written as text or as a list, joined by commas.
+fn listed(meta: &Array[(Str, Docgen.Meta)], key: Str) -> Str {
+  match Meta.get(meta, key) {
+    case Some(Docgen.Items(values)) => values.map(|value: Docgen.Meta| match value { case Docgen.Text(written) => written case _ => "" }).filter(|written: Str| !written.isEmpty()).join(", ")
+    case Some(Docgen.Text(written)) => written
+    case _ => ""
+  }
+}
+
+/// An address made absolute against the site's base address, or page-relative without one.
+fn absolute(path: Str, baseUrl: Str, root: Str) -> Str {
+  if path.isEmpty() || Paths.remote(path) { return path }
+  if baseUrl.isEmpty() { return root + path }
+  (if baseUrl.endsWith("/") { baseUrl } else { baseUrl + "/" }) + path
+}
+
+/// Structured breadcrumb data for search engines, when the site's base address is known.
+fn structured(page: &Docgen.Page, frame: &Frame, siteName: Str, baseUrl: Str) -> Str {
+  if baseUrl.isEmpty() { return "" }
+  let base = if baseUrl.endsWith("/") { baseUrl } else { baseUrl + "/" }
+  var items = [Json.object(&[("@type", Json.Text("ListItem")), ("position", Json.Number(1)), ("name", Json.Text(siteName)), ("item", Json.Text(base + "index.html"))])]
+  var position = 2
+  for item in frame.trail {
+    if !item.href.isEmpty() && !Paths.remote(item.href) {
+      items = items.push(Json.object(&[("@type", Json.Text("ListItem")), ("position", Json.Number(position)), ("name", Json.Text(item.title)), ("item", Json.Text(base + Paths.pathOf(item.href)))]))
+      position = position + 1
+    }
+  }
+  let data = Json.object(&[("@context", Json.Text("https://schema.org")), ("@type", Json.Text("BreadcrumbList")), ("itemListElement", Json.list(&items))])
+  Json.encode(&data).replace("</", "<\\/")
+}
+
+/// Nested navigation as HTML lists; items on the trail to the page start expanded.
+export fn tocHtml(items: &Array[Docgen.TocItem], page: Str, trail: &Array[Docgen.TocItem]) -> Str {
+  var pieces = ["<ul>"]
+  for item in *items {
+    let open = item.expanded || trail.contains(item)
+    let classes = (if item.children.isEmpty() { "" } else { "has-children" }) + (if open && !item.children.isEmpty() { " expanded" } else { "" })
+    pieces = pieces.push(if classes.isEmpty() { "<li>" } else { "<li class=\"" + classes + "\">" })
+    if item.href.isEmpty() && item.children.isEmpty() {
+      pieces = pieces.push("<span class=\"toc-heading\">" + Paths.escape(item.title) + "</span>")
+    } else if item.href.isEmpty() {
+      pieces = pieces.push("<button type=\"button\" class=\"toc-group\" aria-expanded=\"" + (if open { "true" } else { "false" }) + "\">" + Paths.escape(item.title) + "</button>")
+    } else {
+      let href = if Paths.remote(item.href) { item.href } else { Paths.between(page, item.href) }
+      let current = if Paths.pathOf(item.href) == page { " class=\"active\" aria-current=\"page\"" } else { "" }
+      pieces = pieces.push("<a href=\"" + Paths.escape(href) + "\"" + current + ">" + Paths.escape(item.title) + "</a>")
+    }
+    if !item.children.isEmpty() { pieces = pieces.push(tocHtml(&item.children, page, trail)) }
+    pieces = pieces.push("</li>")
+  }
+  pieces.push("</ul>").join("")
+}
+
+/// Top navigation items; the one leading to the page's section is active.
+fn navbar(page: &Docgen.Page, frame: &Frame) -> Array[Docgen.Meta] {
+  frame.navbar.map(fn(item: Docgen.TocItem) -> Docgen.Meta {
+      let href = if Paths.remote(item.href) || item.href.isEmpty() { item.href } else { Paths.between(page.path, item.href) }
+      let active = (!frame.trail.isEmpty() && frame.trail[0].title == item.title) || Paths.pathOf(item.href) == page.path
+      Docgen.Fields([("name", Docgen.Text(item.title)), ("href", Docgen.Text(href)), ("active", Docgen.Flag(active))])
+    })
+}
+
+/// The site root followed by the page's navigation trail; the last entry has no link.
+fn breadcrumb(page: &Docgen.Page, frame: &Frame, siteName: Str) -> Array[Docgen.Meta] {
+  var entries = [Docgen.Fields([("name", Docgen.Text(siteName)), ("href", Docgen.Text(Paths.between(page.path, "index.html")))])]
+  let trail = if frame.trail.isEmpty() { [Docgen.TocItem{title: page.title, href: page.path, uid: "", expanded: false, children: []}] } else { frame.trail }
+  var index = 0
+  for item in trail {
+    let last = index == trail.length() - 1
+    let href = if last || item.href.isEmpty() || Paths.remote(item.href) { "" } else { Paths.between(page.path, item.href) }
+    entries = entries.push(Docgen.Fields([("name", Docgen.Text(if last { page.title } else { item.title })), ("href", Docgen.Text(href))]))
+    index = index + 1
+  }
+  entries
+}
+
+/// A previous or next page as template metadata.
+fn neighbor(item: &Option[Docgen.TocItem], page: Str) -> Docgen.Meta {
+  match item {
+    case Some(found) => Docgen.Fields([("name", Docgen.Text(found.title)), ("href", Docgen.Text(Paths.between(page, found.href)))])
+    case None => Docgen.Nothing
+  }
+}

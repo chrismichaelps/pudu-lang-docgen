@@ -1,0 +1,203 @@
+/** @Docgen.Build.Site — navigation, page frames, templated pages, and site-wide files */
+module PuduLangDocgen.Build.Site
+
+import Std.Json as Json
+import Std.Map as Map
+import PuduLangDocgen.Configuration as Configuration
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Meta as Meta
+import PuduLangDocgen.Navigation as Navigation
+import PuduLangDocgen.Navigation.Resolve as Resolve
+import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.References as References
+import PuduLangDocgen.Site.Redirect as Redirect
+import PuduLangDocgen.Site.Search as Search
+import PuduLangDocgen.Site.Sitemap as Sitemap
+import PuduLangDocgen.Site.View as View
+import PuduLangDocgen.Theme as Theme
+
+/** @Docgen.Build.Book — a resolved table of contents with where it publishes and its metadata */
+export type Book = { output: Str, items: Array[Docgen.TocItem], meta: Array[(Str, Docgen.Meta)], nested: Bool }
+
+/** @Docgen.Build.Context — what every page of the site is framed with */
+export type Context = {
+  config: Configuration.Config,
+  books: Array[Book],
+  look: Theme.Look,
+  history: Map[Str, Str],
+  repository: Configuration.Contribution,
+  global: Array[(Str, Docgen.Meta)],
+  generator: Str,
+  today: Str
+}
+
+/// Edit link patterns by host family; `\{repo\}`, `\{branch\}`, and `\{path\}` are filled in.
+const EDIT_PATTERNS: Array[(Str, Str)] = [
+  ("github", "\{repo\}/blob/\{branch\}/\{path\}"), ("gitlab", "\{repo\}/-/blob/\{branch\}/\{path\}"),
+  ("vso", "\{repo\}?path=/\{path\}&version=GB\{branch\}"), ("azure", "\{repo\}?path=/\{path\}&version=GB\{branch\}"),
+  ("bitbucket", "\{repo\}/src/\{branch\}/\{path\}")
+]
+
+/// Tables of contents resolved against the site; entries without an output only serve as
+/// targets of other tables. Tables another table links are nested and rank after tables of
+/// their own folder unless they declare an `order`.
+export fn books(tocs: &Array[(Str, Str, Navigation.Toc)], links: &Resolve.Links) -> (Array[Book], Array[Docgen.Diagnostic]) {
+  var referenced: Array[Str] = []
+  for (_source, _output, toc) in *tocs {
+    for item in flattened(&toc.items) {
+      if Navigation.isToc(Paths.pathOf(item.href)) || item.href.endsWith("/") { referenced = referenced.push(item.href) }
+    }
+  }
+  var result: Array[Book] = []
+  var problems: Array[Docgen.Diagnostic] = []
+  for (source, output, toc) in *tocs {
+    if output.isEmpty() { continue }
+    let (items, found) = Resolve.resolve(source, links)
+    problems = problems.concat(found)
+    let name = source.split("/")[source.split("/").length() - 1]
+    let folder = Paths.directoryOf(source).split("/")
+    let nested = referenced.filter(|href: Str| href.endsWith(name) || href.endsWith(folder[folder.length() - 1] + "/")).length() > 0
+    result = result.push(Book{output: Resolve.outputOf(output), items: items, meta: toc.meta, nested: nested})
+  }
+  (result, problems)
+}
+
+/// Every page rendered through the layout, with redirect pages standing alone.
+export fn rendered(pages: &Array[Docgen.Page], context: &Context) -> Array[Docgen.Artifact] {
+  let root = context.books.filter(|book: Book| book.output == "toc.json")
+  let navbar = if root.isEmpty() { [] } else { root[0].items.map(|item: Docgen.TocItem| Docgen.TocItem{..item, children: []}) }
+  let rootItems = if root.isEmpty() { [] } else { root[0].items }
+  let candidates = context.books.map(|book: Book| Resolve.Candidate{output: book.output, order: orderOf(&book), pages: Resolve.pagesOf(&book.items)})
+  var result: Array[Docgen.Artifact] = []
+  for page in *pages {
+    if page.kind == "redirect" {
+      result = result.push(Docgen.Artifact{path: page.path, content: Redirect.page(page.title, Meta.textOr(&page.meta, "redirect_url", "index.html"))})
+      continue
+    }
+    let governing = Resolve.governing(page.path, &candidates)
+    let book = context.books.filter(|held: Book| held.output == governing)
+    let items = if book.isEmpty() { [] } else { book[0].items }
+    let fromRoot = Resolve.trail(&rootItems, page.path)
+    let (previous, next) = Resolve.neighbors(&items, page.path)
+    let features = ["math", "mermaid"].filter(|feature: Str| page.body.contains("class=\"" + feature))
+    let pdf = if book.isEmpty() || !Meta.flag(&book[0].meta, "pdf") { "" } else { pdfOf(&book[0]) }
+    let frame = View.Frame {
+      navbar: navbar, toc: items, trail: if fromRoot.isEmpty() { Resolve.trail(&items, page.path) } else { fromRoot },
+      previous: previous, next: next, editUrl: editUrl(&page, context), updated: Map.getOr(&context.history, page.source, ""),
+      features: features, root: if page.kind == "not-found" { basePath(&page.meta) } else { "" }, pdf: pdf, year: context.today.take(4), tocPath: governing,
+      navPath: if root.isEmpty() { "" } else { "toc.json" }
+    }
+    let view = View.view(&page, &frame)
+    result = result.push(Docgen.Artifact{path: page.path, content: Theme.page(&context.look, &view)})
+    if !context.config.exportViewModel.isEmpty() { result = result.push(Docgen.Artifact{path: modelPath(context.config.exportViewModel, context.config.output, page.path, ".view.json"), content: Json.encodePretty(&Meta.toJson(&view))}) }
+    if !context.config.exportRawModel.isEmpty() { result = result.push(Docgen.Artifact{path: modelPath(context.config.exportRawModel, context.config.output, page.path, ".raw.json"), content: Json.encodePretty(&raw(&page))}) }
+  }
+  result
+}
+
+/// Site-wide files: tables of contents as JSON, the search index, the sitemap, and the
+/// cross-reference map.
+export fn files(pages: &Array[Docgen.Page], references: &Array[Docgen.Reference], context: &Context) -> Array[Docgen.Artifact] {
+  var result: Array[Docgen.Artifact] = []
+  for book in context.books { result = result.push(Docgen.Artifact{path: book.output, content: Json.encodePretty(&Navigation.toJson(&relative(&book.items, book.output)))}) }
+  if Meta.textOr(&context.global, "_enableSearch", "true") != "false" { result = result.push(Docgen.Artifact{path: "index.json", content: Search.index(pages)}) }
+  let base = Meta.textOr(&context.global, "_baseUrl", "")
+  match context.config.sitemap {
+    case Some(options) => {
+      let modified = pages.map(|page: Docgen.Page| (page.path, Map.getOr(&context.history, page.source, context.today)))
+      result = result.push(Docgen.Artifact{path: "sitemap.xml", content: Sitemap.render(pages, &options, &modified)})
+    }
+    case None => {}
+  }
+  let mapBase = match context.config.sitemap {
+    case Some(options) => options.baseUrl
+    case None => base
+  }
+  result.push(Docgen.Artifact{path: "xrefmap.yml", content: References.toYaml(references, mapBase)})
+}
+
+/// A generated page for addresses the site does not have.
+export fn notFound(global: &Array[(Str, Docgen.Meta)]) -> Docgen.Page {
+  let body = "<h1 id=\"page-not-found\">Page not found</h1>\n<p>The page you requested does not exist or has moved.</p>\n<p><a href=\"index.html\">Go to the home page</a></p>\n"
+  Docgen.Page{path: "404.html", source: "", kind: "not-found", title: "Page not found", uid: "", summary: "", body: body, headings: [], links: [], meta: Meta.merge(global, &[("_noindex", Docgen.Flag(true)), ("_disableToc", Docgen.Flag(true)), ("_disableBreadcrumb", Docgen.Flag(true))])}
+}
+
+/// The manifest listing every output with its source and kind, and the generator version.
+export fn manifest(pages: &Array[Docgen.Page], resources: &Array[(Str, Str)], generator: Str, outputs: &Array[Str]) -> Str {
+  let entries = pages.map(|page: Docgen.Page| Json.object(&[("type", Json.Text(page.kind)), ("source", Json.Text(page.source)), ("output", Json.Text(page.path))])).concat(resources.map(fn(entry: (Str, Str)) -> Json.Json {
+        let (source, output) = entry
+        Json.object(&[("type", Json.Text("resource")), ("source", Json.Text(source)), ("output", Json.Text(output))])
+      }))
+  Json.encodePretty(&Json.object(&[("generator", Json.Text("pudu-lang-docgen")), ("version", Json.Text(generator)), ("files", Json.list(&entries)), ("outputs", Json.list(&outputs.map(|path: Str| Json.Text(path))))]))
+}
+
+/// The `order` a table declares, or 100 for nested tables and 0 otherwise.
+fn orderOf(book: &Book) -> Int {
+  match Meta.get(&book.meta, "order") {
+    case Some(Docgen.Whole(value)) => value
+    case _ => if book.nested { 100 } else { 0 }
+  }
+}
+
+/// The PDF a table publishes: `pdfFileName` beside the table, `toc.pdf` by default.
+export fn pdfOf(book: &Book) -> Str {
+  let name = Meta.textOr(&book.meta, "pdfFileName", "toc.pdf")
+  let directory = Paths.directoryOf(book.output)
+  if directory.isEmpty() { name } else { directory + "/" + name }
+}
+
+/// Items in depth-first order.
+fn flattened(items: &Array[Docgen.TocItem]) -> Array[Docgen.TocItem] {
+  var result: Array[Docgen.TocItem] = []
+  for item in *items { result = result.push(item).concat(flattened(&item.children)) }
+  result
+}
+
+/// Items with destinations made relative to a published file.
+fn relative(items: &Array[Docgen.TocItem], from: Str) -> Array[Docgen.TocItem] {
+  items.map(|item: Docgen.TocItem| Docgen.TocItem{..item, href: if item.href.isEmpty() || Paths.remote(item.href) { item.href } else { Paths.between(from, item.href) }, children: relative(&item.children, from)})
+}
+
+/// The edit link of a page's source file, or the empty text without a repository.
+fn editUrl(page: &Docgen.Page, context: &Context) -> Str {
+  if page.source.isEmpty() { return "" }
+  let contribute = Meta.fieldsOf(&page.meta, "_gitContribute")
+  let repo = Meta.textOr(&contribute, "repo", context.repository.repo)
+  if repo.isEmpty() { return "" }
+  let branch = Meta.textOr(&contribute, "branch", context.repository.branch)
+  let prefix = Meta.textOr(&contribute, "path", context.repository.path)
+  let path = if prefix.isEmpty() { page.source } else { prefix + "/" + page.source }
+  let written = Meta.textOr(&page.meta, "_gitUrlPattern", if repo.contains("gitlab") { "gitlab" } else if repo.contains("dev.azure.com") || repo.contains("visualstudio.com") { "vso" } else if repo.contains("bitbucket") { "bitbucket" } else { "github" })
+  var pattern = written
+  for (name, template) in EDIT_PATTERNS {
+    if name == written { pattern = template }
+  }
+  let trimmed = if repo.endsWith("/") { repo.take(repo.length() - 1) } else if repo.endsWith(".git") { repo.take(repo.length() - 4) } else { repo }
+  pattern.replace("\{repo\}", trimmed).replace("\{branch\}", branch).replace("\{path\}", path)
+}
+
+/// The path prefix of the site's base address, or `/` when none is known.
+fn basePath(meta: &Array[(Str, Docgen.Meta)]) -> Str {
+  let base = Meta.textOr(meta, "_baseUrl", "")
+  if base.isEmpty() { return "/" }
+  let afterScheme = if base.contains("://") { base.split("://")[1] } else { base }
+  let slash = afterScheme.indexOf("/")
+  let path = if slash < 0 { "/" } else { afterScheme.drop(slash) }
+  if path.endsWith("/") { path } else { path + "/" }
+}
+
+/// Where a model export of a page is written, keeping its path inside the export folder.
+fn modelPath(folder: Str, output: Str, page: Str, suffix: Str) -> Str {
+  let inner = if folder == output { "" } else if folder.startsWith(output + "/") { folder.drop(output.length() + 1) + "/" } else { "_models/" }
+  inner + page + suffix
+}
+
+/// A page as its data model.
+fn raw(page: &Docgen.Page) -> Json.Json {
+  Json.object(&[
+      ("path", Json.Text(page.path)), ("source", Json.Text(page.source)), ("kind", Json.Text(page.kind)), ("title", Json.Text(page.title)),
+      ("uid", Json.Text(page.uid)), ("summary", Json.Text(page.summary)), ("body", Json.Text(page.body)),
+      ("headings", Json.list(&page.headings.map(|heading: Docgen.Heading| Json.object(&[("id", Json.Text(heading.id)), ("title", Json.Text(heading.title)), ("level", Json.Number(heading.level))])))),
+      ("metadata", Meta.toJson(&Docgen.Fields(page.meta)))
+    ])
+}
