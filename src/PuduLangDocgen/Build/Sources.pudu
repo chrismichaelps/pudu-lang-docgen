@@ -13,10 +13,11 @@ import PuduLangDocgen.Meta as Meta
 import PuduLangDocgen.Navigation as Navigation
 import PuduLangDocgen.Paths as Paths
 import PuduLangDocgen.Rest.OpenApi as OpenApi
+import PuduLangDocgen.Site.Gallery as Gallery
 import PuduLangDocgen.Yaml as Yaml
 
 /** @Docgen.Build.Document — one content file read into the form its kind needs */
-export type Document = Article(Markdown.Article) | Service(OpenApi.Service) | ApiPage(Docgen.Meta) | Moved(Str)
+export type Document = Article(Markdown.Article) | Service(OpenApi.Service) | ApiPage(Docgen.Meta) | Catalog(Docgen.Meta) | Moved(Str)
 
 /** @Docgen.Build.Entry — a content file, where it publishes, and its merged metadata */
 export type Entry = { source: Str, output: Str, meta: Array[(Str, Docgen.Meta)], document: Document }
@@ -32,14 +33,30 @@ const API_PAGE: Str = "#YamlMime:ApiPage"
 /// folder, and no `exclude` glob does. The output keeps that inner path under `dest`. Files
 /// under `skip` folders are never selected; the first mapping to select a file wins.
 export fn mapped(mappings: &Array[Configuration.Mapping], paths: &Array[Str], skip: &Array[Str]) -> Array[(Str, Str)] {
-  var result: Array[(Str, Str)] = []
+  selected(mappings, paths, skip).map(fn(entry: (Str, Str, Array[(Str, Docgen.Meta)])) -> (Str, Str) {
+      let (source, output, _meta) = entry
+      (source, output)
+    })
+}
+
+/// Metadata that the group of a file's mapping gives it, by source path.
+export fn groupMeta(mappings: &Array[Configuration.Mapping], paths: &Array[Str], skip: &Array[Str]) -> Map[Str, Array[(Str, Docgen.Meta)]] {
+  mapOf(selected(mappings, paths, skip).map(fn(entry: (Str, Str, Array[(Str, Docgen.Meta)])) -> (Str, Array[(Str, Docgen.Meta)]) {
+        let (source, _output, meta) = entry
+        (source, meta)
+      }))
+}
+
+/// Selected files with their outputs and group metadata.
+fn selected(mappings: &Array[Configuration.Mapping], paths: &Array[Str], skip: &Array[Str]) -> Array[(Str, Str, Array[(Str, Docgen.Meta)])] {
+  var result: Array[(Str, Str, Array[(Str, Docgen.Meta)])] = []
   var taken: Array[Str] = []
   for mapping in *mappings {
-    for path in List.sortBy(paths, |left: Str, right: Str| left < right) {
+    for path in List.sorted(paths) {
       if taken.contains(path) || skip.filter(|folder: Str| path.startsWith(folder + "/")).length() > 0 { continue }
       let inner = if mapping.src.isEmpty() { path } else if path.startsWith(mapping.src + "/") { path.drop(mapping.src.length() + 1) } else { "" }
       if inner.isEmpty() || !Glob.matchesAny(&mapping.files, inner) || Glob.matchesAny(&mapping.exclude, inner) { continue }
-      result = result.push((path, if mapping.dest.isEmpty() { inner } else { mapping.dest + "/" + inner }))
+      result = result.push((path, if mapping.dest.isEmpty() { inner } else { mapping.dest + "/" + inner }, mapping.meta))
       taken = taken.push(path)
     }
   }
@@ -72,8 +89,8 @@ export fn metadata(config: &Configuration.Config, files: &Map[Str, Str]) -> (Arr
 
 /// Content files read by kind: Markdown articles and redirects, HTTP interface descriptions,
 /// structured API pages, and tables of contents. Metadata merges global values, then file
-/// rules, then the file's own header, which wins.
-export fn read(content: &Array[(Str, Str)], files: &Map[Str, Str], global: &Array[(Str, Docgen.Meta)], rules: &Array[Meta.Rule], alerts: &Array[Str]) -> Read {
+/// metadata of the file's group, then file rules, then the file's own header, which wins.
+export fn read(content: &Array[(Str, Str)], files: &Map[Str, Str], global: &Array[(Str, Docgen.Meta)], rules: &Array[Meta.Rule], alerts: &Array[Str], groups: &Map[Str, Array[(Str, Docgen.Meta)]]) -> Read {
   var entries: Array[Entry] = []
   var tocs: Array[(Str, Str, Navigation.Toc)] = []
   var problems: Array[Docgen.Diagnostic] = []
@@ -85,7 +102,7 @@ export fn read(content: &Array[(Str, Str)], files: &Map[Str, Str], global: &Arra
         continue
       }
     }
-    let inherited = Meta.merge(global, &Meta.forPath(rules, source))
+    let inherited = Meta.merge(&Meta.merge(global, &Map.getOr(groups, source, [])), &Meta.forPath(rules, source))
     let lowered = source.toLower()
     if Navigation.isToc(source) {
       match Navigation.parse(source, text) {
@@ -102,14 +119,16 @@ export fn read(content: &Array[(Str, Str)], files: &Map[Str, Str], global: &Arra
     } else if lowered.endsWith(".yml") || lowered.endsWith(".yaml") || lowered.endsWith(".json") {
       match structured(source, text) {
         case Ok(value) => {
-          if text.trim().startsWith(API_PAGE) {
+          if text.split("\n")[0].contains(Gallery.MARKER) {
+            entries = entries.push(Entry{source: source, output: Paths.output(output), meta: inherited, document: Catalog(value)})
+          } else if text.trim().startsWith(API_PAGE) {
             entries = entries.push(Entry{source: source, output: Paths.output(output), meta: inherited, document: ApiPage(value)})
           } else if OpenApi.recognizes(&value) {
             match OpenApi.read(&value) {
               case Ok(service) => { entries = entries.push(Entry{source: source, output: Paths.output(output), meta: inherited, document: Service(service)}) }
               case Err(reason) => { problems = problems.push(Docgen.error(Codes.CONTENT_INVALID, source, 1, reason)) }
             }
-          } else { problems = problems.push(Docgen.warning(Codes.CONTENT_UNSUPPORTED, source, 1, "structured file is neither an interface description nor an API page and is skipped")) }
+          } else { problems = problems.push(Docgen.warning(Codes.CONTENT_UNSUPPORTED, source, 1, "structured file is not an interface description, an API page, or a catalog and is skipped")) }
         }
         case Err(reason) => { problems = problems.push(Docgen.error(Codes.CONTENT_INVALID, source, 1, reason)) }
       }

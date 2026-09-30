@@ -114,7 +114,7 @@ fn stringEnd(cs: &Array[Char], index: Int) -> Int {
     if depth == 0 && character == '"' { return end + 1 }
     if character == '{' { depth = depth + 1 }
     if character == '}' && depth > 0 { depth = depth - 1 }
-    if depth > 0 && character == '"' {
+    if character == '"' {
       end = stringEnd(cs, end)
       continue
     }

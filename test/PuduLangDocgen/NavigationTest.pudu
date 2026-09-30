@@ -49,6 +49,12 @@ fn links() -> Resolve.Links {
   Resolve.Links{tocs: tocs, outputs: outputs, references: references, titles: mapOf([("guide/start.html", "Start")])}
 }
 
+/// A table of a section label and a page, resolved.
+fn labels() -> Array[Docgen.TocItem] {
+  let (items, _problems) = Resolve.resolve("docs/labels.yml", &Resolve.Links{..links(), tocs: mapOf([("docs/labels.yml", parsed("docs/labels.yml", "- name: Section\n- name: Home\n  href: index.md"))])})
+  items
+}
+
 /// Runs every parsing, resolution, governing, trail, and ordering contract.
 fn main() -> Int {
   let (root, problems) = Resolve.resolve("docs/toc.yml", &links())
@@ -89,6 +95,7 @@ fn main() -> Int {
       Test.equals("output of toc", &[Resolve.outputOf("docs/toc.yml"), Resolve.outputOf("toc.md")], &["docs/toc.json", "toc.json"]),
       Test.equals("trail", &Resolve.trail(&root, "guide/advanced.html").map(|found: Docgen.TocItem| found.title), &["Guide", "Deep", "Advanced"]),
       Test.equals("deepest item wins the trail", &Resolve.trail(&root, "guide/start.html").map(|found: Docgen.TocItem| found.title), &["Guide", "Start"]),
+      Test.equals("name-only items become labels", &labels().map(|found: Docgen.TocItem| (found.title, found.href)), &[("Section", ""), ("Home", "index.html")]),
       Test.equals("reading order", &Resolve.readingOrder(&root).map(|found: Docgen.TocItem| found.href), &["index.html", "guide/start.html", "guide/advanced.html#tuning", "api/Api.Root.html"]),
       Test.equals("neighbors", &Resolve.neighbors(&root, "guide/start.html"), &(Some(root[0]), Some(root[1].children[1].children[0]))),
       Test.equals("unlisted page has no neighbors", &Resolve.neighbors(&root, "other.html"), &(None, None)),

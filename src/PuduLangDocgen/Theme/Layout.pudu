@@ -21,7 +21,7 @@ const LAYOUT: Array[Str] = [
   "</main>",
   "\{\{#showAffix\}\}\{\{>affix\}\}\{\{/showAffix\}\}",
   "</div>",
-  "\{\{^chromeless\}\}\{\{>footer\}\}\{\{/chromeless\}\}",
+  "\{\{#showFooter\}\}\{\{>footer\}\}\{\{/showFooter\}\}",
   "\{\{>scripts\}\}",
   "</body>",
   "</html>"

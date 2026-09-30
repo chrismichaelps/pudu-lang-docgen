@@ -24,7 +24,10 @@ import PuduLangDocgen.Navigation as Navigation
 import PuduLangDocgen.Navigation.Resolve as Resolve
 import PuduLangDocgen.Paths as Paths
 import PuduLangDocgen.References as References
+import PuduLangDocgen.Rest.OpenApi as OpenApi
 import PuduLangDocgen.Rest.Pages as RestPages
+import PuduLangDocgen.Site.Format as Format
+import PuduLangDocgen.Site.Gallery as Gallery
 import PuduLangDocgen.Theme as Theme
 
 /** @Docgen.Build.Input — everything a build reads, already loaded from the project */
@@ -72,7 +75,7 @@ export fn site(input: &Input, extending: &Extensions) -> Result[Built, Array[Doc
   let global = Meta.merge(&declared, &templateMeta(&input.template, &input.assets))
   var kinds: Array[Str] = []
   for (kind, _style) in config.alerts { kinds = kinds.push(kind) }
-  let read = Sources.read(&content, &input.files, &global, &rules, &kinds)
+  let read = Sources.read(&content, &input.files, &global, &rules, &kinds, &Sources.groupMeta(&config.content, &input.paths, &[config.output]))
   problems = problems.concat(read.diagnostics)
   var sections: Array[Overwrite.Section] = []
   for (source, _output) in Sources.mapped(&config.overwrite, &input.paths, &[config.output]) {
@@ -103,7 +106,7 @@ export fn site(input: &Input, extending: &Extensions) -> Result[Built, Array[Doc
     match entry.document {
       case Sources.Service(service) => {
         let located = Phrase.Scope{page: entry.output, source: entry.source, outputs: mapOf([]), references: mapOf([]), settings: settings}
-        let (_page, found, _problems) = RestPages.page(&service, Meta.textOr(&entry.meta, "uid", Paths.slug(service.title)), &located)
+        let (_pages, found, _problems) = servicePages(&service, Meta.textOr(&entry.meta, "uid", Paths.slug(service.title)), &located, &config.templates)
         own = own.concat(found)
       }
       case _ => {}
@@ -114,8 +117,8 @@ export fn site(input: &Input, extending: &Extensions) -> Result[Built, Array[Doc
   let outputMap = mapOf(outputs)
   var pages: Array[Docgen.Page] = []
   for entry in read.entries {
-    let (page, found) = render(&entry, &outputMap, &registry, &settings, &sections)
-    pages = pages.push(page)
+    let (rendered, found) = render(&entry, &outputMap, &registry, &settings, &sections, &config.templates)
+    pages = pages.concat(rendered)
     problems = problems.concat(found)
   }
   for (options, selected) in units {
@@ -151,7 +154,7 @@ export fn site(input: &Input, extending: &Extensions) -> Result[Built, Array[Doc
     }
   }
   if tocs.isEmpty() {
-    let articles = List.sortBy(&pages.filter(|page: Docgen.Page| page.kind == "article" && !page.source.isEmpty()), |left: Docgen.Page, right: Docgen.Page| left.path < right.path)
+    let articles = List.sortOn(&pages.filter(|page: Docgen.Page| page.kind == "article" && !page.source.isEmpty()), |held: Docgen.Page| held.path)
     let items = articles.map(|page: Docgen.Page| Docgen.TocItem{title: page.title, href: page.source, uid: "", expanded: false, children: []})
     tocs = [("toc.yml", "toc.yml", Navigation.Toc{items: items, meta: []})]
   }
@@ -168,7 +171,8 @@ export fn site(input: &Input, extending: &Extensions) -> Result[Built, Array[Doc
     case Err(found) => { return Err(Checks.ruled(&problems.concat(found), &config.rules, config.warningsAsErrors)) }
   }
   let context = Site.Context{config: config, books: books, look: look, history: input.history, repository: input.repository, global: global, generator: input.generator, today: input.today}
-  var artifacts = Theme.assets().concat(Site.rendered(&pages, &context)).concat(Site.files(&pages, &own, &context))
+  let pagesHtml = Site.rendered(&pages, &context).map(|artifact: Docgen.Artifact| if artifact.path.endsWith(".html") { Docgen.Artifact{..artifact, content: Format.html(artifact.content)} } else { artifact })
+  var artifacts = Theme.assets().concat(pagesHtml).concat(Site.files(&pages, &own, &context))
   let copied = input.resources.map(fn(entry: (Str, Docgen.Resource)) -> Docgen.Resource {
       let (_source, resource) = entry
       resource
@@ -180,13 +184,13 @@ export fn site(input: &Input, extending: &Extensions) -> Result[Built, Array[Doc
                 let (from, _held) = resource
                 from == source
               }).length() > 0
-          }), input.generator, &List.sortBy(&allPaths, |left: Str, right: Str| left < right)) })
+          }), input.generator, &List.sorted(&allPaths)) })
   for transform in extending.artifacts { artifacts = transform(artifacts) }
   problems = problems.concat(Checks.outputs(&artifacts.map(|artifact: Docgen.Artifact| artifact.path).concat(copied.map(|resource: Docgen.Resource| resource.path))))
   let final = Checks.ruled(&problems, &config.rules, config.warningsAsErrors)
   if Docgen.failed(&final) { return Err(final) }
-  let ordered = List.sortBy(&artifacts, |left: Docgen.Artifact, right: Docgen.Artifact| left.path < right.path)
-  let planned = Docgen.Plan{artifacts: ordered, resources: List.sortBy(&copied, |left: Docgen.Resource, right: Docgen.Resource| left.path < right.path), diagnostics: final}
+  let ordered = List.sortOn(&artifacts, |held: Docgen.Artifact| held.path)
+  let planned = Docgen.Plan{artifacts: ordered, resources: List.sortOn(&copied, |held: Docgen.Resource| held.path), diagnostics: final}
   Ok(Built{plan: planned, pages: pages, books: books})
 }
 
@@ -254,7 +258,7 @@ fn titleOf(entry: &Sources.Entry) -> Str {
 }
 
 /// One content entry rendered as a page.
-fn render(entry: &Sources.Entry, outputs: &Map[Str, Str], registry: &Map[Str, Docgen.Reference], settings: &Phrase.Rendering, sections: &Array[Overwrite.Section]) -> (Docgen.Page, Array[Docgen.Diagnostic]) {
+fn render(entry: &Sources.Entry, outputs: &Map[Str, Str], registry: &Map[Str, Docgen.Reference], settings: &Phrase.Rendering, sections: &Array[Overwrite.Section], templates: &Array[Str]) -> (Array[Docgen.Page], Array[Docgen.Diagnostic]) {
   let located = Phrase.Scope{page: entry.output, source: entry.source, outputs: *outputs, references: *registry, settings: *settings}
   let uid = Meta.textOr(&entry.meta, "uid", "")
   let meta = Meta.merge(&entry.meta, &Overwrite.metaFor(sections, uid))
@@ -263,18 +267,32 @@ fn render(entry: &Sources.Entry, outputs: &Map[Str, Str], registry: &Map[Str, Do
     case Sources.Article(article) => {
       let rendered = Render.render(&article.blocks, &located)
       let heading = if rendered.title.isEmpty() && !Meta.textOr(&meta, "title", "").isEmpty() { "<h1 id=\"" + Paths.escape(Paths.slug(base.title)) + "\">" + Paths.escape(base.title) + "</h1>\n" } else { "" }
-      (Docgen.Page{..base, summary: if base.summary.isEmpty() { rendered.summary } else { base.summary }, body: heading + rendered.html, headings: rendered.headings, links: rendered.links}, rendered.diagnostics)
+      ([Docgen.Page{..base, summary: if base.summary.isEmpty() { rendered.summary } else { base.summary }, body: heading + rendered.html, headings: rendered.headings, links: rendered.links}], rendered.diagnostics)
     }
-    case Sources.Moved(_target) => (Docgen.Page{..base, kind: "redirect"}, [])
+    case Sources.Moved(_target) => ([Docgen.Page{..base, kind: "redirect"}], [])
     case Sources.Service(service) => {
-      let (page, _references, found) = RestPages.page(&service, if uid.isEmpty() { Paths.slug(service.title) } else { uid }, &located)
-      (Docgen.Page{..page, meta: meta}, found)
+      let (found, _references, problems) = servicePages(&service, if uid.isEmpty() { Paths.slug(service.title) } else { uid }, &located, templates)
+      (found.map(|page: Docgen.Page| Docgen.Page{..page, meta: meta}), problems)
+    }
+    case Sources.Catalog(value) => match Gallery.render(&value, &located) {
+      case Ok(found) => ([Docgen.Page{..base, kind: "catalog", title: found.title, body: found.body, headings: found.headings, links: found.links}], found.diagnostics)
+      case Err(reason) => ([base], [Docgen.error(Codes.CONTENT_INVALID, entry.source, 1, reason)])
     }
     case Sources.ApiPage(value) => match Sheet.render(&value, &located) {
-      case Ok(found) => (Docgen.Page{..base, kind: "api-page", title: found.title, body: found.body, headings: found.headings, links: found.links}, found.diagnostics)
-      case Err(reason) => (base, [Docgen.error(Codes.CONTENT_INVALID, entry.source, 1, reason)])
+      case Ok(found) => ([Docgen.Page{..base, kind: "api-page", title: found.title, body: found.body, headings: found.headings, links: found.links}], found.diagnostics)
+      case Err(reason) => ([base], [Docgen.error(Codes.CONTENT_INVALID, entry.source, 1, reason)])
     }
   }
+}
+
+/// The pages of an HTTP interface: one page, or split per tag or operation when the
+/// `rest.tagpage` or `rest.operationpage` template is listed.
+fn servicePages(service: &OpenApi.Service, uid: Str, located: &Phrase.Scope, templates: &Array[Str]) -> (Array[Docgen.Page], Array[Docgen.Reference], Array[Docgen.Diagnostic]) {
+  let byTag = templates.contains("rest.tagpage")
+  let byOperation = templates.contains("rest.operationpage")
+  if byTag || byOperation { return RestPages.split(service, uid, located, byTag, byOperation) }
+  let (page, references, problems) = RestPages.page(service, uid, located)
+  ([page], references, problems)
 }
 
 /// Generated API navigation bound by identity rather than by path.

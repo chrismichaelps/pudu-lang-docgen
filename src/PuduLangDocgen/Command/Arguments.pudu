@@ -1,0 +1,145 @@
+/** @Docgen.Command.Arguments — command lines read into commands, paths, and options */
+module PuduLangDocgen.Command.Arguments
+
+import Std.Path as Path
+import PuduLangDocgen.Constants.Package as Package
+
+/** @Docgen.Command.Parsed — a command, its positional arguments, and its options */
+export type Parsed = { command: Str, positional: Array[Str], flags: Array[Str], values: Array[(Str, Str)] }
+
+/// Options that take a value, with their short forms.
+const VALUED: Array[(Str, Str)] = [
+  ("--output", "-o"), ("--metadata", "-m"), ("--xref", "-x"), ("--template", "-t"), ("--theme", ""), ("--port", "-p"),
+  ("--hostname", "-n"), ("--log", "-l"), ("--logLevel", ""), ("--open-file", "")
+]
+
+/// Options that stand alone, with their short forms.
+const FLAGS: Array[(Str, Str)] = [
+  ("--force", ""), ("--dryRun", ""), ("--warningsAsErrors", ""), ("--disableGitFeatures", ""), ("--exportRawModel", ""),
+  ("--exportViewModel", ""), ("--serve", "-s"), ("--watch", "-w"), ("--open-browser", ""), ("--yes", "-y"), ("--all", "-a"),
+  ("--verbose", ""), ("--help", "-h")
+]
+
+/// Command words.
+const COMMAND_WORDS: Array[Str] = ["build", "metadata", "serve", "init", "pdf", "download", "merge", "template", "version", "help"]
+
+/// Commands and what they do, for help text.
+const COMMANDS: Array[(Str, Str)] = [
+  ("[config]", "Build the site, API reference included, and PDFs when a table enables them"),
+  ("build [config]", "Build the site"),
+  ("metadata [config]", "Write API metadata files for the configured sources"),
+  ("pdf [config]", "Build the site and a PDF for every table of contents that sets pdf"),
+  ("serve [folder]", "Preview a built site over HTTP"),
+  ("init [folder]", "Create a new documentation project"),
+  ("template list | export [name]", "List the built-in templates or copy one for customizing"),
+  ("download <file> --xref <address>", "Save a cross-reference map from the web"),
+  ("merge <maps...> -o <file>", "Combine cross-reference maps into one"),
+  ("version", "Print the package version"),
+  ("help", "Print this help")
+]
+
+/// Option help lines.
+const OPTIONS: Array[Str] = [
+  "  -o, --output <folder>        Output folder instead of the configured one",
+  "  -m, --metadata <key=value>   Global metadata; text, or true/false",
+  "  -x, --xref <map>             Another cross-reference map address or path",
+  "  -t, --template <folder>      Another template folder",
+  "      --theme <folder>         Another template folder, applied after templates",
+  "      --force                  Rewrite every output file",
+  "      --dryRun                 Validate and plan without writing",
+  "      --warningsAsErrors       Fail on any warning",
+  "      --disableGitFeatures     Skip dates and edit links from git",
+  "      --exportRawModel         Write each page's data model beside it",
+  "      --exportViewModel        Write each page's view model beside it",
+  "  -l, --log <file>             Save every diagnostic as JSON",
+  "      --logLevel <level>       Print error, warning, info, verbose, or diagnostic messages",
+  "      --verbose                Print verbose messages and the files written",
+  "  -s, --serve                  Preview the site after building",
+  "  -w, --watch                  Rebuild while serving when sources change",
+  "  -n, --hostname <host>        Preview host (localhost)",
+  "  -p, --port <number>          Preview port (8080)",
+  "      --open-browser           Open the preview in the default browser",
+  "      --open-file <path>       Open this site path in the browser",
+  "  -y, --yes                    Accept every default when creating a project",
+  "  -a, --all                    Export every built-in template",
+  "  -h, --help                   Print this help"
+]
+
+/// Command-line arguments read into a command, positional arguments, and options.
+export fn parse(arguments: &Array[Str]) -> Result[Parsed, Str] {
+  var parsed = Parsed{command: "", positional: [], flags: [], values: []}
+  var index = 0
+  if !arguments.isEmpty() && COMMAND_WORDS.contains(arguments[0]) {
+    parsed = Parsed{..parsed, command: arguments[0]}
+    index = 1
+  }
+  while index < arguments.length() {
+    let argument = arguments[index]
+    let valued = longName(&VALUED, argument)
+    let flag = longName(&FLAGS, argument)
+    if !valued.isEmpty() {
+      if index + 1 >= arguments.length() { return Err("option " + argument + " needs a value") }
+      parsed = Parsed{..parsed, values: parsed.values.push((valued, arguments[index + 1]))}
+      index = index + 2
+    } else if !flag.isEmpty() {
+      parsed = Parsed{..parsed, flags: parsed.flags.push(flag)}
+      index = index + 1
+    } else if argument.startsWith("-") {
+      return Err("unknown option " + argument)
+    } else {
+      parsed = Parsed{..parsed, positional: parsed.positional.push(argument)}
+      index = index + 1
+    }
+  }
+  let most = if parsed.command == "merge" { 1000 } else if parsed.command == "template" { 2 } else { 1 }
+  if parsed.positional.length() > most { return Err("expected at most " + show(most) + " path" + (if most == 1 { "" } else { "s" }) + ", found " + parsed.positional.join(" ")) }
+  Ok(parsed)
+}
+
+/// Help text listing commands and options.
+export fn usage() -> Str {
+  var lines = ["Usage: docgen [command] [path] [options]", "", "Commands:"]
+  for (name, description) in COMMANDS { lines = lines.push("  " + pad(name, 34) + description) }
+  lines.concat(["", "Options:"]).concat(OPTIONS).join("\n")
+}
+
+/// Whether a flag was given.
+export fn has(parsed: &Parsed, flag: Str) -> Bool { parsed.flags.contains(flag) }
+
+/// The last value given for an option, or the fallback.
+export fn valueOf(parsed: &Parsed, name: Str, fallback: Str) -> Str {
+  var found = fallback
+  for (key, value) in parsed.values {
+    if key == name { found = value }
+  }
+  found
+}
+
+/// Every value given for an option, in order.
+export fn valuesOf(parsed: &Parsed, name: Str) -> Array[Str] {
+  var found: Array[Str] = []
+  for (key, value) in parsed.values {
+    if key == name { found = found.push(value) }
+  }
+  found
+}
+
+/// A configuration path; a folder names its `docgen.json`.
+export fn configPath(written: Str) -> Str {
+  if written.endsWith(".json") || written.endsWith(".yml") || written.endsWith(".yaml") { written } else { Path.join(written, Package.CONFIG_FILE) }
+}
+
+/// The long name of an option in a table, or the empty text when it is not listed.
+fn longName(table: &Array[(Str, Str)], written: Str) -> Str {
+  for (long, short) in *table {
+    if written == long || (!short.isEmpty() && written == short) { return long }
+  }
+  ""
+}
+
+/// Text padded with spaces to a width.
+fn pad(text: Str, width: Int) -> Str {
+  var pieces = [text]
+  for _step in text.length()..width { pieces = pieces.push(" ") }
+  pieces.join("") + " "
+}

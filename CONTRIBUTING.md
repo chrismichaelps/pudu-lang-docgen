@@ -19,5 +19,5 @@ All shipped modules live beneath `PuduLangDocgen`. Source files remain below 500
 Public declarations document accepted input, output, and failures. File/type headers use
 one-line namespace anchors. Comments state contracts rather than narrating code.
 Private governance inputs remain ignored and never appear in history or public artifacts.
-Release promotion requires the capability ledger, mutation report, integration tests,
+Release promotion requires the capability ledger, integration tests,
 independent reviews, and public API wiki to agree with the delivered package.

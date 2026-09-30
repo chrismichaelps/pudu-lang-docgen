@@ -33,7 +33,8 @@ const MATHJAX: Str = "https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-chtml.js"
 
 /// The view of a page: site identity, navigation, content, and interface text.
 /// Page metadata switches parts off with `_disableToc`, `_disableAffix`, `_disableBreadcrumb`,
-/// `_disableNavbar`, `_disableContribution`, `_disableNextArticle`, and `_enableSearch: false`.
+/// `_disableNavbar`, `_disableFooter`, `_disableContribution`, `_disableNextArticle`, and
+/// `_enableSearch: false`.
 export fn view(page: &Docgen.Page, frame: &Frame) -> Docgen.Meta {
   let meta = page.meta
   let root = if frame.root.isEmpty() { Paths.rootOf(page.path) } else { frame.root }
@@ -64,6 +65,7 @@ export fn view(page: &Docgen.Page, frame: &Frame) -> Docgen.Meta {
     ("showToc", Docgen.Flag(showToc)), ("showAffix", Docgen.Flag(showAffix)), ("showNavbar", Docgen.Flag(showNavbar)),
     ("showBreadcrumb", Docgen.Flag(!plain && !Meta.flag(&meta, "_disableBreadcrumb"))), ("showTocFilter", Docgen.Flag(!Meta.flag(&meta, "_disableTocFilter"))),
     ("layout", Docgen.Text(layout)), ("chromeless", Docgen.Flag(layout == "chromeless")),
+    ("showFooter", Docgen.Flag(layout != "chromeless" && !Meta.flag(&meta, "_disableFooter"))),
     ("logoUrl", Docgen.Text(Meta.textOr(&meta, "_appLogoUrl", root + "index.html"))),
     ("keywords", Docgen.Text(listed(&meta, "keywords"))), ("author", Docgen.Text(Meta.textOr(&meta, "author", ""))),
     ("ogType", Docgen.Text(if layout == "landing" || page.path == "index.html" { "website" } else { "article" })),
@@ -131,7 +133,9 @@ export fn tocHtml(items: &Array[Docgen.TocItem], page: Str, trail: &Array[Docgen
     let open = item.expanded || trail.contains(item)
     let classes = (if item.children.isEmpty() { "" } else { "has-children" }) + (if open && !item.children.isEmpty() { " expanded" } else { "" })
     pieces = pieces.push(if classes.isEmpty() { "<li>" } else { "<li class=\"" + classes + "\">" })
-    if item.href.isEmpty() {
+    if item.href.isEmpty() && item.children.isEmpty() {
+      pieces = pieces.push("<span class=\"toc-heading\">" + Paths.escape(item.title) + "</span>")
+    } else if item.href.isEmpty() {
       pieces = pieces.push("<button type=\"button\" class=\"toc-group\" aria-expanded=\"" + (if open { "true" } else { "false" }) + "\">" + Paths.escape(item.title) + "</button>")
     } else {
       let href = if Paths.remote(item.href) { item.href } else { Paths.between(page, item.href) }

@@ -1,0 +1,176 @@
+/** @Docgen.Command.Actions — reporting and the commands that create and exchange files */
+module PuduLangDocgen.Command.Actions
+
+import Std.Io as Io
+import Std.Path as Path
+import PuduLangDocgen.Command.Arguments as Arguments
+import PuduLangDocgen.Constants.Package as Package
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Docset.Tasks as Tasks
+import PuduLangDocgen.Scaffold as Scaffold
+import PuduLangLog.Configuration as LogConfiguration
+import PuduLangLog.Formatting.Compact as Compact
+import PuduLangLog as Log
+import PuduLangLog.Logger as Logger
+import PuduLangLog.Sinks.Console as Console
+import PuduLangLog.Sinks.File as File
+import PuduLangLog.Sinks.Theme as Theme
+import PuduLangLog.Value as Value
+
+/// Console layout: the rendered message alone, one per line.
+const CONSOLE_TEMPLATE: Str = "\{Message:lj\}\{NewLine\}"
+
+/// Template of every diagnostic event; its properties keep the code and location as data.
+const DIAGNOSTIC_TEMPLATE: Str = "\{Path\}:\{Line\}: \{Severity\} \{Code\}: \{Text\}"
+
+/// A logger for a command line: messages at or above `--logLevel` (information unless set,
+/// debug with `--verbose`) on the console with warnings and errors on standard error, and every
+/// event as compact JSON in the `--log` file when one is named.
+export fn logger(parsed: &Arguments.Parsed) -> Result[Logger.Logger, Str] {
+  let written = Arguments.valueOf(parsed, "--logLevel", if Arguments.has(parsed, "--verbose") { "verbose" } else { "info" })
+  let minimum = match levelOf(written) {
+    case Some(found) => found
+    case None => { return Err("log level must be error, warning, info, verbose, or diagnostic: " + written) }
+  }
+  var configured = LogConfiguration.create().minimumLevel(minimum).writeTo(Console.sink(Console.Options{..Console.defaults(), outputTemplate: CONSOLE_TEMPLATE, theme: Theme.none(), colored: false, standardErrorFromLevel: Some(Log.Warning)}))
+  let file = Arguments.valueOf(parsed, "--log", "")
+  if !file.isEmpty() { configured = configured.writeTo(File.sink(File.Options{..File.defaults(file), formatter: Compact.compact()})) }
+  Ok(configured.createLogger())
+}
+
+/// Diagnostics written as events at their severity.
+export fn report(log: &Logger.Logger, problems: &Array[Docgen.Diagnostic]) -> () {
+  for problem in *problems {
+    let values = [Value.text(problem.path), Value.int(problem.line), Value.text(severity(&problem)), Value.text(problem.code), Value.text(problem.message)]
+    match problem.severity {
+      case Docgen.Error => log.error(DIAGNOSTIC_TEMPLATE, values)
+      case Docgen.Warning => log.warning(DIAGNOSTIC_TEMPLATE, values)
+      case Docgen.Information => log.information(DIAGNOSTIC_TEMPLATE, values)
+    }
+  }
+}
+
+/// A plain message at information level.
+export fn say(log: &Logger.Logger, text: Str) -> () { log.information("\{Text\}", [Value.text(text)]) }
+
+/// A plain message at debug level, shown with `--verbose`.
+export fn detail(log: &Logger.Logger, text: Str) -> () { log.debug("\{Text\}", [Value.text(text)]) }
+
+/// Reports failures and answers the failed-work status.
+export fn failed(log: &Logger.Logger, problems: &Array[Docgen.Diagnostic]) -> Int {
+  report(log, problems)
+  let errors = problems.filter(|problem: Docgen.Diagnostic| problem.severity == Docgen.Error).length()
+  log.error("Failed with \{Errors\} error(s) and \{Warnings\} warning(s).", [Value.int(errors), Value.int(problems.length() - errors)])
+  1
+}
+
+/// Creates a project, asking for a title and API sources unless `--yes` accepts defaults.
+export fn initialize(log: &Logger.Logger, parsed: &Arguments.Parsed) -> Int {
+  let folder = if parsed.positional.isEmpty() { "." } else { parsed.positional[0] }
+  let name = Path.nameOf(if folder == "." { Path.directoryOf(Path.join(folder, "x")) } else { folder })
+  var answers = Scaffold.defaults(name)
+  if !Arguments.has(parsed, "--yes") {
+    answers = Scaffold.Answers{..answers, title: ask("Site title", answers.title)}
+    answers = Scaffold.Answers{..answers, api: ask("Document Pudu sources (yes/no)", "yes").toLower().startsWith("y")}
+    if answers.api { answers = Scaffold.Answers{..answers, sources: ask("Source folder", answers.sources)} }
+    answers = Scaffold.Answers{..answers, pdf: ask("Enable PDF (yes/no)", "no").toLower().startsWith("y")}
+  }
+  match Tasks.init(folder, &answers) {
+    case Ok(written) => {
+      for path in written { say(log, "created " + path) }
+      say(log, "Run: docgen " + (if folder == "." { "" } else { folder + " " }) + "--serve")
+      0
+    }
+    case Err(problems) => failed(log, &problems)
+  }
+}
+
+/// Lists built-in templates or exports one, or every one with `--all`, into a folder.
+export fn template(log: &Logger.Logger, parsed: &Arguments.Parsed) -> Int {
+  let action = if parsed.positional.isEmpty() { "list" } else { parsed.positional[0] }
+  if action == "list" {
+    for name in Package.BUILT_IN_TEMPLATES { say(log, name) }
+    return 0
+  }
+  if action != "export" {
+    log.error("template expects list or export", [])
+    return 2
+  }
+  let chosen = if parsed.positional.length() > 1 { parsed.positional[1] } else { "default" }
+  let names = if Arguments.has(parsed, "--all") { ["default"] } else { [chosen] }
+  let root = Arguments.valueOf(parsed, "--output", "_exported_templates")
+  for name in names {
+    if name != "default" && name != "modern" && name != "statictoc" {
+      log.error("template \{Name\} has no files to export", [Value.text(name)])
+      return 2
+    }
+    match Tasks.exportTemplate(Path.join(root, name)) {
+      case Ok(written) => { for path in written { detail(log, "wrote " + Path.join(Path.join(root, name), path)) } }
+      case Err(problems) => { return failed(log, &problems) }
+    }
+    say(log, "exported " + name + " to " + Path.join(root, name))
+  }
+  0
+}
+
+/// Saves a cross-reference map named by `--xref` into a file.
+export fn download(log: &Logger.Logger, parsed: &Arguments.Parsed) -> Int {
+  let address = Arguments.valueOf(parsed, "--xref", "")
+  if parsed.positional.isEmpty() || address.isEmpty() {
+    log.error("download needs a file and --xref <address>", [])
+    return 2
+  }
+  match Tasks.download(address, parsed.positional[0]) {
+    case Ok(count) => {
+      say(log, "saved " + show(count) + " references to " + parsed.positional[0])
+      0
+    }
+    case Err(problems) => failed(log, &problems)
+  }
+}
+
+/// Combines cross-reference maps into the `--output` file.
+export fn merge(log: &Logger.Logger, parsed: &Arguments.Parsed) -> Int {
+  let file = Arguments.valueOf(parsed, "--output", "")
+  if parsed.positional.isEmpty() || file.isEmpty() {
+    log.error("merge needs maps and --output <file>", [])
+    return 2
+  }
+  match Tasks.merge(&parsed.positional, file) {
+    case Ok(count) => {
+      say(log, "merged " + show(count) + " references into " + file)
+      0
+    }
+    case Err(problems) => failed(log, &problems)
+  }
+}
+
+/// The minimum level a `--logLevel` name sets.
+fn levelOf(name: Str) -> Option[Log.Level] {
+  match name {
+    case "error" => Some(Log.Error)
+    case "warning" => Some(Log.Warning)
+    case "info" => Some(Log.Information)
+    case "verbose" => Some(Log.Debug)
+    case "diagnostic" => Some(Log.Verbose)
+    case _ => None
+  }
+}
+
+/// The word a severity is shown with.
+fn severity(problem: &Docgen.Diagnostic) -> Str {
+  match problem.severity {
+    case Docgen.Error => "error"
+    case Docgen.Warning => "warning"
+    case Docgen.Information => "info"
+  }
+}
+
+/// An answer read from the console, or the default for an empty line.
+fn ask(question: Str, fallback: Str) -> Str {
+  let _asked = Io.writeLine(question + " [" + fallback + "]: ")
+  match Io.readLineOrEnd() {
+    case Ok(Some(line)) => if line.trim().isEmpty() { fallback } else { line.trim() }
+    case _ => fallback
+  }
+}

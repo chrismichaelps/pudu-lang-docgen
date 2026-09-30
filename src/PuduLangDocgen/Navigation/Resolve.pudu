@@ -180,7 +180,7 @@ fn entry(path: Str, item: &Docgen.TocItem, links: &Links, trailOf: Array[Str]) -
     }
   }
   if title.isEmpty() && !href.isEmpty() { title = Map.getOr(&links.titles, Paths.pathOf(href), "") }
-  if title.isEmpty() || (href.isEmpty() && children.isEmpty()) { return (None, problems) }
+  if title.isEmpty() || (href.isEmpty() && children.isEmpty() && (!item.href.isEmpty() || !item.uid.isEmpty())) { return (None, problems) }
   (Some(Docgen.TocItem{title: title, href: href, uid: item.uid, expanded: item.expanded, children: children}), problems)
 }
 

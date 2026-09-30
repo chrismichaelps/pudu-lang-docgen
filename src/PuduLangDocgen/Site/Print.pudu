@@ -7,6 +7,7 @@ import PuduLangDocgen as Docgen
 import PuduLangDocgen.Meta as Meta
 import PuduLangDocgen.Navigation.Resolve as Resolve
 import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.Site.Format as Format
 
 /** @Docgen.Site.Printable — one document to print and the settings of its table */
 export type Printable = { html: Str, path: Str, pdf: Str, header: Str, footer: Str, background: Bool }
@@ -62,7 +63,7 @@ export fn documents(pages: &Array[Docgen.Page], books: &Array[Site.Book]) -> Arr
       if background { "<style>* \{ print-color-adjust: exact; -webkit-print-color-adjust: exact; \}</style>" } else { "" },
       "</head>", "<body class=\"print\">", "<main class=\"content\">", pieces.join("\n"), "</main>", "</body>", "</html>"
     ].join("\n") + "\n"
-    result = result.push(Printable{html: html, path: path, pdf: pdf, header: Meta.textOr(&book.meta, "pdfHeaderTemplate", ""), footer: Meta.textOr(&book.meta, "pdfFooterTemplate", FOOTER), background: background})
+    result = result.push(Printable{html: Format.html(html), path: path, pdf: pdf, header: Meta.textOr(&book.meta, "pdfHeaderTemplate", ""), footer: Meta.textOr(&book.meta, "pdfFooterTemplate", FOOTER), background: background})
   }
   result
 }

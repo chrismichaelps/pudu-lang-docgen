@@ -107,3 +107,25 @@ export fn directory(reader: &Reader, key: Str, fallback: Str) -> Result[Str, Doc
   if !Paths.relative(cleaned) { return Err(failure(reader, key, "must be a relative folder inside the project: " + written)) }
   Ok(cleaned)
 }
+
+/// Longest run of leading `../` segments a source folder may have.
+const MAX_ASCENT: Int = 8
+
+/// A relative folder under a key that may start above the configuration folder with `../`
+/// segments; the rest must be a portable relative path.
+export fn sourceFolder(reader: &Reader, key: Str, fallback: Str) -> Result[Str, Docgen.Diagnostic] {
+  let written = text(reader, key, fallback) ?
+  var rest = if written.endsWith("/") { written.take(written.length() - 1) } else { written }
+  if rest.startsWith("./") { rest = rest.drop(2) }
+  var ascent = 0
+  while rest == ".." || rest.startsWith("../") {
+    ascent = ascent + 1
+    rest = if rest == ".." { "" } else { rest.drop(3) }
+  }
+  if ascent > MAX_ASCENT { return Err(failure(reader, key, "leads more than " + show(MAX_ASCENT) + " folders above the project: " + written)) }
+  if !rest.isEmpty() && rest != "." && !Paths.relative(rest) { return Err(failure(reader, key, "must be a relative folder: " + written)) }
+  var parts: Array[Str] = []
+  for _step in 0..ascent { parts = parts.push("..") }
+  if !rest.isEmpty() && rest != "." { parts = parts.push(rest) }
+  Ok(parts.join("/"))
+}

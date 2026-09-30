@@ -6,6 +6,7 @@ import PuduLangDocgen.Constants.Codes as Codes
 import PuduLangDocgen as Docgen
 import PuduLangDocgen.Markdown.Syntax as Syntax
 import PuduLangDocgen.Paths as Paths
+import PuduLangDocgen.References as References
 
 /** @Docgen.Markdown.Rendering — site-wide choices about how article content renders */
 export type Rendering = { newTab: Bool, plantUml: Str, diagrams: Map[Str, Str], alertClasses: Map[Str, Str], alertTitles: Map[Str, Str] }
@@ -191,7 +192,7 @@ fn xref(out: Out, span: &Syntax.XrefSpan, context: &Scope, origin: Str) -> Out {
       emit(named, "</a>")
     }
     case None => {
-      let warned = report(out, Docgen.warning(Codes.XREF_UNRESOLVED, origin, span.line, "unresolved cross reference: " + span.uid))
+      let warned = report(out, Docgen.warning(Codes.XREF_UNRESOLVED, origin, span.line, References.UNRESOLVED + span.uid))
       let opened = emit(warned, "<span class=\"xref unresolved\">")
       let named = if span.text.isEmpty() { emit(opened, Paths.escape(if span.optional { "@" + span.uid } else { span.uid })) } else { inlines(opened, &span.text, context, origin) }
       emit(named, "</span>")

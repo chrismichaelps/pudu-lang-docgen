@@ -132,7 +132,7 @@ export fn merge(sources: &Array[Str], file: Str) -> Result[Int, Array[Docgen.Dia
       seen = seen.push(reference.uid)
     }
   }
-  let ordered = List.sortBy(&kept, |left: Docgen.Reference, right: Docgen.Reference| left.uid < right.uid)
+  let ordered = List.sortOn(&kept, |held: Docgen.Reference| held.uid)
   write(file, if file.toLower().endsWith(".json") { References.toJson(&ordered, "") } else { References.toYaml(&ordered, "") }) ?
   Ok(ordered.length())
 }
