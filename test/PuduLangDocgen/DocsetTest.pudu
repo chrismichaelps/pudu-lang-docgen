@@ -11,7 +11,9 @@ import PuduLangDocgen.Command as Command
 import PuduLangDocgen.Constants.Codes as Codes
 import PuduLangDocgen as Docgen
 import PuduLangDocgen.Docset as Docset
+import PuduLangDocgen.Docset.Tasks as Tasks
 import PuduLangDocgen.Docset.Walk as Walk
+import PuduLangDocgen.Scaffold as Scaffold
 import PuduLangDocgen.Serve as Serve
 
 /// Files of the project written for these checks.
@@ -85,14 +87,31 @@ fn main() -> Int {
       Test.equals("missing configuration", &built(Path.join(root, "none.json"), &quiet).written.length(), &1),
       Test.that("state kept beside the configuration", Io.exists(Path.join(root, ".docgen/build.json"))),
       Test.equals("command parsing", &[parsed(["build", "site", "-o", "out", "--force"]), parsed(["serve", "_site", "--port", "9000"]), parsed(["--dryRun"])], &["build|site|--force|--output=out", "serve|_site||--port=9000", "||--dryRun|"]),
-      Test.equals("command refusals", &[parsed(["--bogus"]), parsed(["build", "-o"]), parsed(["a", "b"])], &["unknown option --bogus", "option -o needs a value", "expected at most one path, found a b"]),
+      Test.equals("command refusals", &[parsed(["--bogus"]), parsed(["build", "-o"]), parsed(["a", "b"])], &["unknown option --bogus", "option -o needs a value", "expected at most 1 path, found a b"]),
       Test.equals("help and version", &[Command.run(&["help"]), Command.run(&["version"]), Command.run(&["--nope"])], &[0, 0, 2]),
       Test.equals("request targets", &["/", "/guide/", "/a%20b.html", "/x.html?q=1", "/../secret", "/%zz"].map(|path: Str| Serve.target(path)), &[Some("index.html"), Some("guide/index.html"), Some("a b.html"), Some("x.html"), None, None]),
       Test.equals("served pages", &[Serve.answer(site, "/index.html").status.code, Serve.answer(site, "/missing.html").status.code], &[200, 404]),
       Test.that("not found page served", Serve.answer(site, "/missing.html").body.contains("Page not found") || match Serve.answer(site, "/missing.html").binaryBody { case Some(_) => true case None => false })
     ])
+  let fresh = Path.join(root, "fresh")
+  let created = match Tasks.init(fresh, &Scaffold.defaults("Fresh")) { case Ok(found) => found case Err(_) => [] }
+  let again = match Tasks.init(fresh, &Scaffold.defaults("Fresh")) { case Ok(_) => "created" case Err(found) => found[0].message }
+  let exported = match Tasks.exportTemplate(Path.join(root, "tpl")) { case Ok(found) => found.length() case Err(_) => 0 }
+  let merged = match Tasks.merge(&[Path.join(site, "xrefmap.yml"), Path.join(site, "xrefmap.yml")], Path.join(root, "all.yml")) { case Ok(count) => count case Err(_) => -1 }
+  let freshBuild = built(Path.join(fresh, "docgen.json"), &quiet)
+  let mode = match Fs.permissions(Path.join(site, "index.html")) { case Ok(found) => found.readable case Err(_) => false }
+  let extra = Test.suite("Docset tasks", &[
+      Test.equals("scaffold files", &created, &["docgen.json", "index.md", "toc.yml", "docs/introduction.md", "docs/getting-started.md", "docs/toc.yml", ".gitignore", "src/Example.pudu"]),
+      Test.equals("existing project refused", &again, &"a project already exists here"),
+      Test.equals("scaffold builds without warnings", &(freshBuild.written.length() > 10, freshBuild.diagnostics), &(true, [])),
+      Test.equals("template export", &exported, &14),
+      Test.equals("merge keeps each identity once", &merged, &0),
+      Test.that("published files readable", mode),
+      Test.that("no staging files left", !Io.exists(Path.join(site, "index.html.docgen-partial"))),
+      Test.equals("new commands parse", &[parsed(["init", "site", "--yes"]), parsed(["template", "export", "out"]), parsed(["merge", "a.yml", "b.yml", "-o", "c.yml"]), parsed(["pdf", "site"])], &["init|site|--yes|", "template|export,out||", "merge|a.yml,b.yml||--output=c.yml", "pdf|site||"])
+    ])
   let _cleaned = Fs.removeTree(root)
-  let ran = Test.run(&checks)
+  let ran = Test.run(&Test.group("Docset", &[checks, extra]))
   for failure in Test.failuresOf(&ran) { let _printed = Io.writeErrorLine(failure) }
   Test.report(&ran)
 }

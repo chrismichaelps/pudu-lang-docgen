@@ -75,12 +75,13 @@ export fn pagesOf(items: &Array[Docgen.TocItem]) -> Array[Str] {
   readingOrder(items).map(|item: Docgen.TocItem| Paths.pathOf(item.href))
 }
 
-/// The items from the top of a tree down to the one linking a page.
+/// The items from the top of a tree down to the deepest one linking a page; a group that
+/// links its first page yields to that page's own item.
 export fn trail(items: &Array[Docgen.TocItem], page: Str) -> Array[Docgen.TocItem] {
   for item in *items {
-    if Paths.pathOf(item.href) == page { return [item] }
     let below = trail(&item.children, page)
     if !below.isEmpty() { return [item].concat(below) }
+    if Paths.pathOf(item.href) == page { return [item] }
   }
   []
 }

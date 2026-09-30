@@ -1,6 +1,8 @@
 /** @Docgen.Docset.Seam — a project folder loaded, built, and published */
 module PuduLangDocgen.Docset
 
+import Std.Bytes as Bytes
+import Std.Crypto as Crypto
 import Std.Fs as Fs
 import Std.Io as Io
 import Std.Map as Map
@@ -17,6 +19,7 @@ import PuduLangDocgen.Constants.Codes as Codes
 import PuduLangDocgen.Constants.Package as Package
 import PuduLangDocgen as Docgen
 import PuduLangDocgen.Docset.Publish as Publish
+import PuduLangDocgen.Docset.Tasks as Tasks
 import PuduLangDocgen.Docset.Tools as Tools
 import PuduLangDocgen.Docset.Walk as Walk
 import PuduLangDocgen.Markdown as Markdown
@@ -125,6 +128,22 @@ export fn build(configFile: Str, chosen: &Options, extending: &Build.Extensions)
   Publish.publish(Path.join(loaded.base, loaded.input.config.output), &all, state, chosen.force)
 }
 
+/// The site built and published, then a PDF for every table of contents that sets `pdf`.
+export fn pdf(configFile: Str, chosen: &Options) -> Result[Array[Str], Array[Docgen.Diagnostic]] {
+  let loaded = load(configFile, chosen) ?
+  let built = match Build.site(&loaded.input, &Build.extensions()) {
+    case Ok(found) => found
+    case Err(problems) => { return Err(loaded.diagnostics.concat(problems)) }
+  }
+  let state = Path.join(Path.join(loaded.base, Package.STATE_FOLDER), "build.json")
+  let _report = Publish.publish(Path.join(loaded.base, loaded.input.config.output), &built.plan, state, chosen.force) ?
+  let renderer = match loaded.input.config.pdf {
+    case Some(settings) => settings.renderer
+    case None => []
+  }
+  Tasks.pdf(loaded.base, &built, loaded.input.config.output, &renderer)
+}
+
 /// API metadata written as files beside the configuration, in each source's format.
 export fn metadata(configFile: Str, chosen: &Options) -> Result[Array[Str], Array[Docgen.Diagnostic]] {
   let loaded = load(configFile, chosen) ?
@@ -137,18 +156,31 @@ export fn metadata(configFile: Str, chosen: &Options) -> Result[Array[Str], Arra
     for (path, text) in Export.files(&selected, source.format) {
       let relative = if folder.isEmpty() { path } else { folder + "/" + path }
       let target = Path.join(loaded.base, relative)
-      match Io.makeDirectory(Path.directoryOf(target)) {
-        case Ok(_) => {}
-        case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, relative, 1, reason)]) }
-      }
-      match Fs.writeTextAtomically(target, text) {
-        case Ok(_) => { written = written.push(relative) }
-        case Err(reason) => { return Err([Docgen.error(Codes.PUBLISH_FAILED, relative, 1, show(reason))]) }
-      }
+      Publish.place(target, text) ?
+      written = written.push(relative)
     }
     index = index + 1
   }
   Ok(written)
+}
+
+/// A digest of every project file's path and content outside the output folder, which
+/// changes whenever a source the build reads changes.
+export fn fingerprint(configFile: Str, output: Str) -> Str {
+  let base = Path.directoryOf(configFile)
+  let paths = match Walk.files(if base.isEmpty() { "." } else { base }, &[output]) {
+    case Ok(found) => found
+    case Err(_) => []
+  }
+  var pieces: Array[Str] = []
+  for path in paths {
+    let content = match Walk.bytes(if base.isEmpty() { "." } else { base }, path) {
+      case Ok(held) => Bytes.encodeHex(&Crypto.sha512(&held))
+      case Err(_) => ""
+    }
+    pieces = pieces.push(path + "=" + content)
+  }
+  Crypto.sha256Hex(pieces.join("\n"))
 }
 
 /// The configuration with command-line options applied.

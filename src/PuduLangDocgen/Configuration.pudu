@@ -23,8 +23,8 @@ export type Contribution = { repo: Str, branch: Str, path: Str }
 /** @Docgen.Configuration.Diagrams — how PlantUML diagrams are drawn */
 export type Diagrams = { remote: Str, format: Str, local: Bool, jar: Str, java: Str }
 
-/** @Docgen.Configuration.Pdf — printable output assembled from tables of contents */
-export type Pdf = { tocs: Array[Str], output: Str, name: Str, renderer: Array[Str] }
+/** @Docgen.Configuration.Pdf — the command that turns printable documents into PDF files */
+export type Pdf = { renderer: Array[Str] }
 
 /** @Docgen.Configuration.Config — everything a build reads from the project configuration */
 export type Config = {
@@ -145,8 +145,8 @@ fn read(top: &Fields.Reader) -> Result[Config, Docgen.Diagnostic] {
   if !map.fields.isEmpty() { config = Config{..config, sitemap: Some(sitemap(&map) ?)} }
   let pdf = Fields.nested(top, "pdf") ?
   if !pdf.fields.isEmpty() {
-    Fields.only(&pdf, &["content", "output", "name", "renderer"]) ?
-    config = Config{..config, pdf: Some(Pdf{tocs: Fields.texts(&pdf, "content") ?, output: Fields.directory(&pdf, "output", "_pdf") ?, name: Fields.text(&pdf, "name", "documentation") ?, renderer: Fields.texts(&pdf, "renderer") ?})}
+    Fields.only(&pdf, &["renderer"]) ?
+    config = Config{..config, pdf: Some(Pdf{renderer: Fields.texts(&pdf, "renderer") ?})}
   }
   Ok(config)
 }

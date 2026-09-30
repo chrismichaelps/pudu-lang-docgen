@@ -50,9 +50,19 @@ export type Extensions = { pages: Array[fn(Docgen.Page) -> Docgen.Page], artifac
 /// Extensions that change nothing.
 export fn extensions() -> Extensions { Extensions{pages: [], artifacts: []} }
 
+/** @Docgen.Build.Built — the validated plan with the pages and navigation it came from */
+export type Built = { plan: Docgen.Plan, pages: Array[Docgen.Page], books: Array[Site.Book] }
+
 /// The site plan, or every error found. Warnings travel with a successful plan; nothing is
 /// planned for output unless the whole site validates.
 export fn plan(input: &Input, extending: &Extensions) -> Result[Docgen.Plan, Array[Docgen.Diagnostic]] {
+  let built = site(input, extending) ?
+  Ok(built.plan)
+}
+
+/// The site plan with its pages and resolved tables of contents, for work that continues
+/// from a built site such as printable documents.
+export fn site(input: &Input, extending: &Extensions) -> Result[Built, Array[Docgen.Diagnostic]] {
   let config = input.config
   var problems: Array[Docgen.Diagnostic] = []
   let content = Sources.mapped(&config.content, &input.paths, &[config.output])
@@ -176,7 +186,8 @@ export fn plan(input: &Input, extending: &Extensions) -> Result[Docgen.Plan, Arr
   let final = Checks.ruled(&problems, &config.rules, config.warningsAsErrors)
   if Docgen.failed(&final) { return Err(final) }
   let ordered = List.sortBy(&artifacts, |left: Docgen.Artifact, right: Docgen.Artifact| left.path < right.path)
-  Ok(Docgen.Plan{artifacts: ordered, resources: List.sortBy(&copied, |left: Docgen.Resource, right: Docgen.Resource| left.path < right.path), diagnostics: final})
+  let planned = Docgen.Plan{artifacts: ordered, resources: List.sortBy(&copied, |left: Docgen.Resource, right: Docgen.Resource| left.path < right.path), diagnostics: final}
+  Ok(Built{plan: planned, pages: pages, books: books})
 }
 
 /// Rendering choices from configuration, metadata, and template tokens.
