@@ -85,7 +85,7 @@ fn main() -> Int {
   let home = artifact(&plan, "index.html")
   let start = artifact(&plan, "guide/start.html")
   let checks = Test.suite("Build", &[
-      Test.equals("artifacts", &paths, &["404.html", "_assets/site.css", "_assets/site.js", "api/Demo.Shapes.Shape.html", "api/Demo.Shapes.html", "api/toc.json", "guide/moved.html", "guide/start.html", "guide/toc.json", "index.html", "index.json", "manifest.json", "rest/pets.html", "sitemap.xml", "toc.json", "xrefmap.yml"]),
+      Test.equals("artifacts", &paths, &["404.html", "_assets/site.css", "_assets/site.js", "api/Demo.Shapes.Shape.html", "api/Demo.Shapes.html", "api/toc.json", "guide/moved.html", "guide/start.html", "guide/toc.json", "index.html", "index.json", "manifest.json", "rest/pets.html", "robots.txt", "sitemap.xml", "toc.json", "xrefmap.yml"]),
       Test.equals("resources copied", &plan.resources.map(|held: Docgen.Resource| held.path), &["images/logo.png"]),
       Test.equals("warnings travel with the plan", &plan.diagnostics.map(|held: Docgen.Diagnostic| held.code), &[Codes.LINK_BROKEN]),
       Test.that("title with site suffix", home.contains("<title>Welcome | Demo</title>")),
@@ -104,6 +104,11 @@ fn main() -> Int {
       Test.that("rest page", artifact(&plan, "rest/pets.html").contains("<span class=\"method method-get\">GET</span>")),
       Test.that("not found page uses the base path", artifact(&plan, "404.html").contains("href=\"/_assets/site.css\"")),
       Test.that("search index", artifact(&plan, "index.json").contains("\"href\":\"guide/start.html\"")),
+      Test.equals("crawler rules name the sitemap", &artifact(&plan, "robots.txt"), &"User-agent: *\nAllow: /\n\nSitemap: https://docs.example/sitemap.xml\n"),
+      Test.equals("own crawler rules kept", &match Build.plan(&Build.Input{..input(""), resources: input("").resources.push(("docs/robots.txt", Docgen.Resource{path: "robots.txt", content: "User-agent: *".toBytes()}))}, &Build.extensions()) {
+          case Ok(found) => (found.artifacts.filter(|held: Docgen.Artifact| held.path == "robots.txt").length(), found.resources.filter(|held: Docgen.Resource| held.path == "robots.txt").length())
+          case Err(_) => (-1, -1)
+        }, &(0, 1)),
       Test.that("sitemap dates", artifact(&plan, "sitemap.xml").contains("<loc>https://docs.example/index.html</loc>\n    <lastmod>2026-09-01</lastmod>")),
       Test.that("xrefmap", artifact(&plan, "xrefmap.yml").contains("- uid: home\n  name: Welcome")),
       Test.that("manifest version", artifact(&plan, "manifest.json").contains("\"version\": \"0.1.0\"")),

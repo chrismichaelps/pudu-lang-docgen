@@ -8,6 +8,14 @@ import PuduLangDocgen.Meta as Meta
 /** @Docgen.Site.SitemapOptions — site address, defaults, and per-glob settings */
 export type Options = { baseUrl: Str, priority: Str, changefreq: Str, files: Array[(Str, Array[(Str, Docgen.Meta)])] }
 
+/// Path of the crawler rules file at the site root.
+export const ROBOTS: Str = "robots.txt"
+
+/// Crawler rules that allow every page and name the sitemap under the base address.
+export fn robots(baseUrl: Str) -> Str {
+  "User-agent: *\nAllow: /\n\nSitemap: " + (if baseUrl.endsWith("/") { baseUrl } else { baseUrl + "/" }) + "sitemap.xml\n"
+}
+
 /// The sitemap XML listing every indexable page under the base address. `modified` gives each
 /// page's last change as `YYYY-MM-DD`, when known. Settings of the last matching glob win.
 export fn render(pages: &Array[Docgen.Page], options: &Options, modified: &Array[(Str, Str)]) -> Str {

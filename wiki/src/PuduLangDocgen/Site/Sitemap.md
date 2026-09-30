@@ -14,7 +14,8 @@ tags: [module, shallow]
 ## Purpose
 
 The crawler map of published pages with base address, priority, change frequency, per-glob
-options, and last change dates.
+options, and last change dates, and the `robots.txt` that names it. The build publishes those
+rules only when the project lists no `robots.txt` of its own.
 
 ## Interface
 
@@ -22,16 +23,19 @@ options, and last change dates.
 
 ```pudu
 export type Options = { baseUrl: Str, priority: Str, changefreq: Str, files: Array[(Str, Array[(Str, Docgen.Meta)])] }
+export const ROBOTS: Str = "robots.txt"
+export fn robots(baseUrl: Str) -> Str
 export fn render(pages: &Array[Docgen.Page], options: &Options, modified: &Array[(Str, Str)]) -> Str
 ```
 
 ### Linkage
 
 - **Requires:** [[src/PuduLangDocgen]] · [[src/PuduLangDocgen/Meta]]
-- **Consumed by:** [[src/PuduLangDocgen/Build/Site]] · [[src/PuduLangDocgen/Configuration]] · [[test/PuduLangDocgen/ThemeTest]]
+- **Consumed by:** [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Build/Site]] · [[src/PuduLangDocgen/Configuration]] · [[test/PuduLangDocgen/ThemeTest]]
 
 ## Algorithm
 
+- `robots` — Crawler rules that allow every page and name the sitemap under the base address.
 - `render` — The sitemap XML listing every indexable page under the base address. `modified` gives each page's last change as `YYYY-MM-DD`, when known. Settings of the last matching glob win.
 
 ## Negative Logic (Prohibited Paths)
@@ -53,4 +57,4 @@ SHALLOW. A formatter.
 
 ## Referenced by
 
-[[src/PuduLangDocgen/Site/_MOC]] · [[src/PuduLangDocgen/Build/Site]] · [[src/PuduLangDocgen/Configuration]]
+[[src/PuduLangDocgen/Site/_MOC]] · [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Build/Site]] · [[src/PuduLangDocgen/Configuration]]
