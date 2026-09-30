@@ -3,31 +3,27 @@ title: Tools
 description: |
   Programs and commands that ship with pudu-lang-docgen. Each one is a thin program over the
   library, so the same behavior is available from Pudu code; see [Library usage](../guides/library.md).
+defaults:
+  type: Command
+  repository:
+    url: https://github.com/chrismichaelps/pudu-lang-docgen
 items:
 - name: Command line
+  type: Program
   description: |
     `examples/Cli.pudu` runs the full `docgen` command line: build, metadata, serve, init, pdf,
     template, download, merge, version, and help.
-  type: Tool
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../guides/commands/index.html
+  homepage: ../guides/commands/index.md
   repository:
     url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/examples/Cli.pudu
   usage:
     command: pudu run examples/Cli.pudu build website
 - name: Build program
+  type: Program
   description: |
     `examples/BuildSite.pudu` builds the sample project in `examples/site` by calling
     `Docset.build` directly, and prints each diagnostic and a summary.
-  type: Tool
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../guides/library.html
+  homepage: ../guides/library.md
   repository:
     url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/examples/BuildSite.pudu
   usage:
@@ -35,56 +31,28 @@ items:
 - name: Preview server
   description: |
     Serves a built site over HTTP, answering missing addresses with the site's not-found page.
-    With `build --serve --watch`, the site is rebuilt whenever a project file changes.
-  type: Command
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../guides/commands/serve.html
-  repository:
-    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Serve.pudu
+    With `--watch`, the site is rebuilt whenever a project file changes.
+  homepage: ../guides/commands/serve.md
   usage:
     command: docgen build docs --serve --watch
 - name: Project scaffolding
   description: |
     Creates a documentation project with a configuration, a landing page, starter articles,
     navigation, and an optional API section.
-  type: Command
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../guides/commands/init.html
-  repository:
-    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Scaffold.pudu
+  homepage: ../guides/commands/init.md
   usage:
-    init: docgen init docs --yes
+    command: docgen init docs --yes
 - name: PDF printing
   description: |
     Prints a PDF for every table of contents that sets `pdf`, using an installed browser or a
     renderer you configure.
-  type: Command
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../guides/pdf.html
-  repository:
-    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/Site/Print.pudu
+  homepage: ../guides/pdf.md
   usage:
     command: docgen pdf docs
     config: '"pdf": { "renderer": ["chromium", "--headless=new", "--print-to-pdf={output}", "{url}"] }'
 - name: Cross-reference maps
   description: |
     Saves another site's map for offline builds and combines several maps into one.
-  type: Command
-  author: Chris Michael
-  version: 0.1.0
-  license: Apache-2.0
-  thumbnail: ../images/pudu-lang-short.png
-  homepage: ../guides/cross-references.html#cross-reference-maps
-  repository:
-    url: https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/PuduLangDocgen/References.pudu
+  homepage: ../guides/cross-references.md
   usage:
     command: docgen download maps/site.yml --xref https://www.pudu-lang-docgen.com/xrefmap.yml

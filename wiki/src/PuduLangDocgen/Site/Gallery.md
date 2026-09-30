@@ -9,12 +9,13 @@ tags: [module, moderate]
 
 # PuduLangDocgen.Site.Gallery
 
-> /** @Docgen.Site.Gallery — catalog pages of extensions shown as cards */
+> /** @Docgen.Site.Gallery — catalog pages listing extensions as entries */
 
 ## Purpose
 
-Catalog pages marked `YamlMime:Dashboard`: a title, a description, and items shown as cards
-with type, author, version, license, thumbnail, links, and usage snippets.
+Catalog pages marked `YamlMime:Dashboard`: a title, a description, `defaults` every item
+inherits, and items listed as entries with a kind label, name, facts, description, usage lines,
+and a source link.
 
 ## Interface
 
@@ -28,30 +29,33 @@ export fn render(value: &Docgen.Meta, context: &Phrase.Scope) -> Result[Rendered
 
 ### Linkage
 
-- **Requires:** [[src/PuduLangDocgen]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Markdown/Phrase]] · [[src/PuduLangDocgen/Meta]] · [[src/PuduLangDocgen/Paths]]
+- **Requires:** [[src/PuduLangDocgen]] · [[src/PuduLangDocgen/Markdown]] · [[src/PuduLangDocgen/Markdown/Phrase]] · [[src/PuduLangDocgen/Markdown/Syntax]] · [[src/PuduLangDocgen/Meta]] · [[src/PuduLangDocgen/Paths]]
 - **Consumed by:** [[src/PuduLangDocgen/Build]] · [[src/PuduLangDocgen/Build/Sources]] · [[test/PuduLangDocgen/ThemeTest]]
 
 ## Algorithm
 
-- `render` — A catalog page: `title`, an optional `description`, and `items`, each with a `name` and any of `description`, `type`, `author`, `version`, `license`, `thumbnail`, `homepage`, `repository.url`, and `usage` entries.
+- `render` — A catalog page: `title`, an optional `description`, optional `defaults` every item inherits, and `items`, each with a `name` and any of `description`, `type`, `author`, `version`, `license`, `thumbnail`, `homepage`, `repository.url`, and `usage` entries. Local addresses are source paths checked like article links.
 
 ## Negative Logic (Prohibited Paths)
 
 - Do not show an item without a name.
-- Do not link an unsafe thumbnail or homepage.
+- Do not emit a homepage, thumbnail, or source address without checking it like an article link.
+- Do not repeat per-item facts the catalog can state once in `defaults`.
 
 ## Edge Cases
 
-- Descriptions render as Markdown.
-- Usage entries appear in a fixed order: install, get, command line, configuration.
+- An item's own fields win over `defaults`.
+- Usage lines appear in a fixed order: Install, Set up, Run, Configure.
+- A missing thumbnail is reported as a missing image; a missing homepage as a broken link.
 
 ## Depth
 
-MODERATE. One page kind with its own card layout.
+MODERATE. One page kind with its own list layout.
 
 ## Grill Log
 
-- Q: Free-form card fields? A: A fixed set, so every card reads the same way. Rejected: inconsistent cards.
+- Q: Cards with images? A: A registry-style list: name and kind beside the description, rules between entries. Rejected: cropped logos repeated on every card.
+- Q: Free-form entry fields? A: A fixed set, so every entry reads the same way. Rejected: inconsistent entries.
 
 ## Referenced by
 
