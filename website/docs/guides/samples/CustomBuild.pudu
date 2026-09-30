@@ -15,17 +15,17 @@ fn reviewed(page: Docgen.Page) -> Docgen.Page {
 // </transform>
 
 // <postprocess>
-/// Adds a robots.txt that points crawlers at the sitemap.
-fn robots(artifacts: Array[Docgen.Artifact]) -> Array[Docgen.Artifact] {
-  let text = "User-agent: *\nAllow: /\nSitemap: https://docs.example.com/sitemap.xml\n"
-  artifacts.push(Docgen.Artifact{path: "robots.txt", content: text})
+/// Adds a humans.txt naming the people behind the site.
+fn humans(artifacts: Array[Docgen.Artifact]) -> Array[Docgen.Artifact] {
+  let text = "/* TEAM */\nDocumentation: Example Docs Team\nSite: https://docs.example.com/\n"
+  artifacts.push(Docgen.Artifact{path: "humans.txt", content: text})
 }
 // </postprocess>
 
 // <main>
 /// Builds the project and prints every diagnostic; answers 0 on success and 1 on failure.
 fn main() -> Int {
-  let extending = Build.Extensions{pages: [reviewed], artifacts: [robots]}
+  let extending = Build.Extensions{pages: [reviewed], artifacts: [humans]}
   let chosen = Docset.Options{..Docset.options(), output: "_preview", warningsAsErrors: true}
   match Docset.build("docs/docgen.json", &chosen, &extending) {
     case Ok(report) => {

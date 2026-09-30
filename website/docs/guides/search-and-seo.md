@@ -33,6 +33,17 @@ Add a `sitemap` section to publish `sitemap.xml`:
 
 Each indexable page is listed under `baseUrl` with its last-modified date from git history, or the build date when history is unavailable. `fileOptions` globs match a page's source path or its published path.
 
+With a sitemap configured, the build also publishes `robots.txt`, which allows every page and names the sitemap so crawlers find it:
+
+```text
+User-agent: *
+Allow: /
+
+Sitemap: https://www.pudu-lang-docgen.com/sitemap.xml
+```
+
+To publish different rules, list your own `robots.txt` as a resource; the build then leaves it as written.
+
 ## Page metadata for search engines
 
 Set `_baseUrl` to the site's public address. With it, every page gets:

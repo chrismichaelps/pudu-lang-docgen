@@ -29,7 +29,7 @@ still to build. The acceptance boundary lists every behavior a row must cover.
 | Page metadata and SEO | tab title with `_appTitle` suffix, favicon, touch icon, theme color, description, keywords, author, canonical, robots, Open Graph and Twitter cards, `_meta` tags, JSON-LD breadcrumbs, analytics tag | Site/View, Theme | Done |
 | Style and script injection | template `public/main.css` and `public/main.js` loaded after the defaults; `_appStyle` and `_appScript` for other files | Build, Theme | Done |
 | Search | index of indexable pages, ranked client search with keyboard use | Site/Search, Theme | Done |
-| Sitemap | base URL, priority, change frequency, per-glob options, last modified | Site/Sitemap | Done |
+| Sitemap | base URL, priority, change frequency, per-glob options, last modified, `robots.txt` naming the sitemap unless the project ships one | Site/Sitemap, Build | Done |
 | Redirects and 404 | `redirect_url` pages; a not-found page for static hosts | Site/Redirect, Build | Done |
 | Configuration | typed `docgen.json`/`docgen.yml`, mappings, metadata files, rules, warnings as errors, dry runs | Configuration | Done |
 | Build | complete validation before output, link and fragment checks, manifest with generator version, raw and view model export | Build | Done |
