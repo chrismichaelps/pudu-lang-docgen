@@ -1,0 +1,80 @@
+{
+  "metadata": [
+    {
+      "src": [
+        {
+          "files": ["**/*.pudu"],
+          "src": "../src"
+        }
+      ],
+      "dest": "api",
+      "namespaceLayout": "nested",
+      "categoryLayout": "nested",
+      "filter": "filterConfig.yml",
+      "sourceUrl": "https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/src/{path}#L{line}"
+    }
+  ],
+  "build": {
+    "content": [
+      {
+        "files": ["**/*.md", "**/toc.yml", "**/*.yml"],
+        "exclude": ["guides/includes/**", "guides/samples/**"],
+        "src": "docs"
+      }
+    ],
+    "overwrite": [
+      {
+        "files": ["**/*.md"],
+        "src": "overwrite"
+      }
+    ],
+    "resource": [
+      {
+        "files": ["images/**"]
+      }
+    ],
+    "output": "_site",
+    "template": ["default", "template"],
+    "globalMetadata": {
+      "_appTitle": "Pudu Docgen",
+      "_appName": "Pudu Docgen",
+      "_appLogoPath": "images/pudu-lang-short.png",
+      "_appFaviconPath": "images/pudu-lang-short.png",
+      "_appTouchIconPath": "images/pudu-lang-short.png",
+      "_appOgImagePath": "images/pudu-lang-short.png",
+      "_baseUrl": "https://www.pudu-lang-docgen.com",
+      "_enableSearch": true,
+      "_lang": "en",
+      "_themeColor": "#5a78fa",
+      "_meta": {
+        "application-name": "Pudu Docgen"
+      },
+      "description": "Documentation publishing for Pudu: articles, API reference from Pudu sources, HTTP API reference, navigation, search, and static websites.",
+      "keywords": ["pudu", "documentation", "static site", "api reference", "openapi"],
+      "_appFooter": "<div class=\"footer-grid\"><div class=\"footer-brand\"><p><strong>Pudu Docgen</strong></p><p><small>Documentation publishing for Pudu. Built with pudu-lang-docgen.</small></p></div><nav class=\"footer-column\" aria-label=\"Documentation\"><p><strong>Documentation</strong></p><ul><li><a href=\"/guides/introduction.html\">Documentation</a></li><li><a href=\"/guides/quick-start.html\">Guides</a></li><li><a href=\"/api/PuduLangDocgen.html\">API reference</a></li></ul></nav><nav class=\"footer-column\" aria-label=\"Project\"><p><strong>Project</strong></p><ul><li><a href=\"https://github.com/chrismichaelps/pudu-lang-docgen\">GitHub repository</a></li><li><a href=\"https://github.com/chrismichaelps/pudu-lang-docgen/issues/new\">Report an issue</a></li><li><a href=\"https://www.pudu-lang.org/\">Pudu language site</a></li></ul></nav><nav class=\"footer-column\" aria-label=\"Policies\"><p><strong>Policies</strong></p><ul><li><a href=\"https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/SECURITY.md\">Security policy</a></li><li><a href=\"https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/CODE_OF_CONDUCT.md\">Code of conduct</a></li><li><a href=\"https://github.com/chrismichaelps/pudu-lang-docgen/blob/main/LICENSE\">License Apache-2.0</a></li></ul></nav></div><div class=\"footer-legal\"><p><small>Built with pudu-lang-docgen.</small></p><p><small>Copyright © 2026 Chris Michael. Licensed under the Apache License 2.0.</small></p></div>"
+    },
+    "sitemap": {
+      "baseUrl": "https://www.pudu-lang-docgen.com",
+      "changefreq": "weekly",
+      "priority": "0.5",
+      "fileOptions": {
+        "index.html": {
+          "priority": "1.0"
+        },
+        "guides/**": {
+          "priority": "0.8"
+        }
+      }
+    },
+    "gitContribute": {
+      "repo": "https://github.com/chrismichaelps/pudu-lang-docgen",
+      "branch": "main",
+      "path": "website"
+    },
+    "markdownEngineProperties": {
+      "alerts": {
+        "SECURITY": "alert alert-caution"
+      }
+    }
+  }
+}

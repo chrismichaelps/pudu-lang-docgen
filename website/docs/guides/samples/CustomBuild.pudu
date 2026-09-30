@@ -1,0 +1,42 @@
+/** @Samples.CustomBuild.Program — a site built from Pudu code with a page transform and a post-processor */
+module CustomBuild
+
+import Std.Io as Io
+import PuduLangDocgen.Build as Build
+import PuduLangDocgen as Docgen
+import PuduLangDocgen.Docset as Docset
+
+// <transform>
+/// Adds a review notice to the end of every article.
+fn reviewed(page: Docgen.Page) -> Docgen.Page {
+  if page.kind != "article" { return page }
+  Docgen.Page{..page, body: page.body + "<p class=\"review-note\">Reviewed for release 0.1.</p>\n"}
+}
+// </transform>
+
+// <postprocess>
+/// Adds a robots.txt that points crawlers at the sitemap.
+fn robots(artifacts: Array[Docgen.Artifact]) -> Array[Docgen.Artifact] {
+  let text = "User-agent: *\nAllow: /\nSitemap: https://docs.example.com/sitemap.xml\n"
+  artifacts.push(Docgen.Artifact{path: "robots.txt", content: text})
+}
+// </postprocess>
+
+// <main>
+/// Builds the project and prints every diagnostic; answers 0 on success and 1 on failure.
+fn main() -> Int {
+  let extending = Build.Extensions{pages: [reviewed], artifacts: [robots]}
+  let chosen = Docset.Options{..Docset.options(), output: "_preview", warningsAsErrors: true}
+  match Docset.build("docs/docgen.json", &chosen, &extending) {
+    case Ok(report) => {
+      for problem in report.diagnostics { let _said = Io.writeLine(Docgen.describe(&problem)) }
+      let _summary = Io.writeLine("written " + show(report.written.length()) + ", unchanged " + show(report.unchanged.length()) + ", removed " + show(report.removed.length()))
+      0
+    }
+    case Err(problems) => {
+      for problem in problems { let _said = Io.writeErrorLine(Docgen.describe(&problem)) }
+      1
+    }
+  }
+}
+// </main>

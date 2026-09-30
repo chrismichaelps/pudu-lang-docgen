@@ -9,3 +9,6 @@ _site/
 .docgen/
 examples/site/_site/
 .claude/
+
+website/_site/
+website/.vercel/
