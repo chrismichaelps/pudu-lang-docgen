@@ -1,24 +1,29 @@
-/** @Docgen.Site.Gallery — catalog pages of extensions shown as cards */
+/** @Docgen.Site.Gallery — catalog pages listing extensions as entries */
 module PuduLangDocgen.Site.Gallery
 
 import PuduLangDocgen as Docgen
 import PuduLangDocgen.Markdown as Markdown
 import PuduLangDocgen.Markdown.Phrase as Phrase
+import PuduLangDocgen.Markdown.Syntax as Syntax
 import PuduLangDocgen.Meta as Meta
 import PuduLangDocgen.Paths as Paths
 
-/** @Docgen.Site.Card — the rendered page of a catalog */
+/** @Docgen.Site.Catalog — the rendered page of a catalog */
 export type Rendered = { title: Str, body: Str, headings: Array[Docgen.Heading], links: Array[Docgen.Link], diagnostics: Array[Docgen.Diagnostic] }
 
 /// Marker on the first line of a catalog file.
 export const MARKER: Str = "YamlMime:Dashboard"
 
-/// Usage entries shown on a card, with their labels.
-const USAGE: Array[(Str, Str)] = [("install", "Install"), ("init", "Get"), ("command", "Command line"), ("config", "Configuration")]
+/// Usage entries shown on an entry, with their labels.
+const USAGE: Array[(Str, Str)] = [("install", "Install"), ("init", "Set up"), ("command", "Run"), ("config", "Configure")]
 
-/// A catalog page: `title`, an optional `description`, and `items`, each with a `name` and any
-/// of `description`, `type`, `author`, `version`, `license`, `thumbnail`, `homepage`,
-/// `repository.url`, and `usage` entries.
+/// Facts shown under an entry's name, in order.
+const FACTS: Array[Str] = ["version", "license", "author"]
+
+/// A catalog page: `title`, an optional `description`, optional `defaults` every item inherits,
+/// and `items`, each with a `name` and any of `description`, `type`, `author`, `version`,
+/// `license`, `thumbnail`, `homepage`, `repository.url`, and `usage` entries. Local addresses are
+/// source paths checked like article links.
 export fn render(value: &Docgen.Meta, context: &Phrase.Scope) -> Result[Rendered, Str] {
   let fields = match value {
     case Docgen.Fields(found) => found
@@ -30,41 +35,48 @@ export fn render(value: &Docgen.Meta, context: &Phrase.Scope) -> Result[Rendered
     case Some(Docgen.Items(found)) => found
     case _ => { return Err("catalog needs an items list") }
   }
-  var result = Rendered{title: title, body: "", headings: [Docgen.Heading{id: Paths.slug(title), title: title, level: 1}], links: [], diagnostics: []}
+  let defaults = Meta.fieldsOf(&fields, "defaults")
+  var out = Phrase.start()
+  var headings = [Docgen.Heading{id: Paths.slug(title), title: title, level: 1}]
   var pieces = ["<h1 id=\"" + Paths.escape(Paths.slug(title)) + "\">" + Paths.escape(title) + "</h1>"]
   let introduction = Meta.textOr(&fields, "description", "")
   if !introduction.isEmpty() {
     let rendered = Markdown.fragment(introduction, context, 1)
     pieces = pieces.push(rendered.html)
-    result = Rendered{..result, links: result.links.concat(rendered.links), diagnostics: result.diagnostics.concat(rendered.diagnostics)}
+    out = Phrase.Out{..out, links: out.links.concat(rendered.links), diagnostics: out.diagnostics.concat(rendered.diagnostics)}
   }
-  pieces = pieces.push("<div class=\"gallery\">")
+  pieces = pieces.push("<div class=\"catalog\">")
   for item in items {
-    let card = match item {
+    let own = match item {
       case Docgen.Fields(found) => found
       case _ => { return Err("each catalog item must be an object") }
     }
+    let card = Meta.merge(&defaults, &own)
     let name = Meta.textOr(&card, "name", "")
     if name.isEmpty() { return Err("each catalog item needs a name") }
     let id = Paths.slug(name)
-    let homepage = safe(Meta.textOr(&card, "homepage", ""))
+    let (linked, homepage) = address(out, &card, "homepage", context, false)
+    out = linked
+    let (pictured, thumbnail) = address(out, &card, "thumbnail", context, true)
+    out = pictured
     let heading = if homepage.isEmpty() { Paths.escape(name) } else { "<a href=\"" + Paths.escape(homepage) + "\">" + Paths.escape(name) + "</a>" }
+    let image = if thumbnail.isEmpty() { "" } else { "<img class=\"catalog-image\" src=\"" + Paths.escape(thumbnail) + "\" alt=\"\" width=\"40\" height=\"40\" loading=\"lazy\">" }
     var facts: Array[Str] = []
-    for key in ["author", "version", "license"] {
+    for key in FACTS {
       let written = Meta.textOr(&card, key, "")
-      if !written.isEmpty() { facts = facts.push(Paths.escape(written)) }
+      if !written.isEmpty() { facts = facts.push("<span>" + Paths.escape(written) + "</span>") }
     }
     let kind = Meta.textOr(&card, "type", "")
-    var parts = ["<article class=\"card\" id=\"" + Paths.escape(id) + "\">"]
-    let thumbnail = safe(Meta.textOr(&card, "thumbnail", ""))
-    if !thumbnail.isEmpty() { parts = parts.push("<img class=\"card-image\" src=\"" + Paths.escape(thumbnail) + "\" alt=\"\" loading=\"lazy\">") }
-    parts = parts.push("<div class=\"card-body\"><h2 class=\"card-title\">" + heading + "</h2>")
-    parts = parts.push("<p class=\"card-meta\">" + (if kind.isEmpty() { "" } else { "<span class=\"badge\">" + Paths.escape(kind) + "</span> " }) + facts.join(" · ") + "</p>")
+    var parts = ["<article class=\"catalog-entry\" id=\"" + Paths.escape(id) + "\"><header class=\"catalog-head\">" + image + "<div>"]
+    if !kind.isEmpty() { parts = parts.push("<p class=\"catalog-kind\">" + Paths.escape(kind) + "</p>") }
+    parts = parts.push("<h2 class=\"catalog-name\">" + heading + "</h2>")
+    if !facts.isEmpty() { parts = parts.push("<p class=\"catalog-facts\">" + facts.join("") + "</p>") }
+    parts = parts.push("</div></header><div class=\"catalog-body\">")
     let description = Meta.textOr(&card, "description", "")
     if !description.isEmpty() {
       let rendered = Markdown.fragment(description, context, 2)
       parts = parts.push(rendered.html)
-      result = Rendered{..result, links: result.links.concat(rendered.links), diagnostics: result.diagnostics.concat(rendered.diagnostics)}
+      out = Phrase.Out{..out, links: out.links.concat(rendered.links), diagnostics: out.diagnostics.concat(rendered.diagnostics)}
     }
     let usage = Meta.fieldsOf(&card, "usage")
     var entries: Array[Str] = []
@@ -72,14 +84,20 @@ export fn render(value: &Docgen.Meta, context: &Phrase.Scope) -> Result[Rendered
       let written = Meta.textOr(&usage, key, "")
       if !written.isEmpty() { entries = entries.push("<dt>" + label + "</dt><dd><code>" + Paths.escape(written) + "</code></dd>") }
     }
-    if !entries.isEmpty() { parts = parts.push("<dl class=\"card-usage\">" + entries.join("") + "</dl>") }
-    let repository = safe(Meta.textOr(&Meta.fieldsOf(&card, "repository"), "url", ""))
-    if !repository.isEmpty() { parts = parts.push("<p class=\"card-links\"><a class=\"external\" href=\"" + Paths.escape(repository) + "\">Source</a></p>") }
+    if !entries.isEmpty() { parts = parts.push("<dl class=\"catalog-usage\">" + entries.join("") + "</dl>") }
+    let (sourced, repository) = address(out, &Meta.fieldsOf(&card, "repository"), "url", context, false)
+    out = sourced
+    if !repository.isEmpty() { parts = parts.push("<p class=\"catalog-source\"><a href=\"" + Paths.escape(repository) + "\">Source</a></p>") }
     pieces = pieces.push(parts.push("</div></article>").join(""))
-    result = Rendered{..result, headings: result.headings.push(Docgen.Heading{id: id, title: name, level: 2})}
+    headings = headings.push(Docgen.Heading{id: id, title: name, level: 2})
   }
-  Ok(Rendered{..result, body: pieces.push("</div>").join("\n")})
+  Ok(Rendered{title: title, body: pieces.push("</div>").join("\n"), headings: headings, links: out.links, diagnostics: out.diagnostics})
 }
 
-/// A destination kept only when it is safe to link.
-fn safe(destination: Str) -> Str { if destination.isEmpty() || !Paths.href(destination) { "" } else { destination } }
+/// The checked browser destination of the address under a key, or the empty text without one;
+/// `image` reports a missing target as a missing image.
+fn address(out: Phrase.Out, fields: &Array[(Str, Docgen.Meta)], key: Str, context: &Phrase.Scope, image: Bool) -> (Phrase.Out, Str) {
+  let written = Meta.textOr(fields, key, "")
+  if written.isEmpty() { return (out, "") }
+  Phrase.destination(out, &Syntax.Target{destination: written, title: "", line: 1}, context, context.source, image)
+}
