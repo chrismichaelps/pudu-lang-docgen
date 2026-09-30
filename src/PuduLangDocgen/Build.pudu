@@ -29,6 +29,7 @@ import PuduLangDocgen.Rest.Pages as RestPages
 import PuduLangDocgen.Site.Format as Format
 import PuduLangDocgen.Site.Gallery as Gallery
 import PuduLangDocgen.Site.Landing as Landing
+import PuduLangDocgen.Site.Sitemap as Sitemap
 import PuduLangDocgen.Theme as Theme
 
 /** @Docgen.Build.Input — everything a build reads, already loaded from the project */
@@ -178,6 +179,12 @@ export fn site(input: &Input, extending: &Extensions) -> Result[Built, Array[Doc
       let (_source, resource) = entry
       resource
     }).concat(input.assets)
+  match config.sitemap {
+    case Some(options) => {
+      if copied.filter(|resource: Docgen.Resource| resource.path == Sitemap.ROBOTS).isEmpty() { artifacts = artifacts.push(Docgen.Artifact{path: Sitemap.ROBOTS, content: Sitemap.robots(options.baseUrl)}) }
+    }
+    case None => {}
+  }
   let allPaths = artifacts.map(|artifact: Docgen.Artifact| artifact.path).concat(copied.map(|resource: Docgen.Resource| resource.path)).push("manifest.json")
   artifacts = artifacts.push(Docgen.Artifact{path: "manifest.json", content: Site.manifest(&pages, &outputs.filter(fn(entry: (Str, Str)) -> Bool {
             let (source, _output) = entry
